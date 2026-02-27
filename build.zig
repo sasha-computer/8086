@@ -24,17 +24,32 @@ pub fn build(b: *std.Build) void {
     }
     run_step.dependOn(&run_cmd.step);
 
-    // zig build test
-    const test_step = b.step("test", "Run all tests");
+    // zig build test -- run all tests (ReleaseFast for speed)
+    // Use -Doptimize=Debug to run with safety checks if needed.
+    const test_step = b.step("test", "Run all tests (ReleaseFast)");
+
+    const test_optimize = if (optimize == .Debug) .ReleaseFast else optimize;
 
     const exe_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
-            .optimize = optimize,
+            .optimize = test_optimize,
         }),
     });
-    test_step.dependOn(&b.addRunArtifact(exe_tests).step);
+    const run_tests = b.addRunArtifact(exe_tests);
+    test_step.dependOn(&run_tests.step);
+
+    // zig build test-debug -- run tests with full safety checks (slow)
+    const test_debug_step = b.step("test-debug", "Run tests in Debug mode (slow, with safety checks)");
+    const debug_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = .Debug,
+        }),
+    });
+    test_debug_step.dependOn(&b.addRunArtifact(debug_tests).step);
 
     // zig build wasm -- Build WASM module for browser
     const wasm = b.addExecutable(.{
