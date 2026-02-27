@@ -17,4 +17,5 @@ test {
     _ = @import("cpu.zig");
     _ = @import("bus.zig");
     _ = @import("decode.zig");
+    _ = @import("test_runner.zig");
 }
