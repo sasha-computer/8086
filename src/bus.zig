@@ -272,3 +272,134 @@ test "segment:offset aliasing" {
     bus.write8(0x0010, 0x0000, 0xAA);
     try std.testing.expectEqual(@as(u8, 0xAA), bus.read8(0x0000, 0x0100));
 }
+
+test "keyboard buffer push/pop" {
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    // Empty buffer
+    try std.testing.expect(!bus.hasKey());
+    try std.testing.expect(bus.popKey() == null);
+    try std.testing.expect(bus.peekKey() == null);
+
+    // Push a key
+    try std.testing.expect(bus.pushKey(0x48, 0x00)); // Up arrow
+    try std.testing.expect(bus.hasKey());
+
+    // Peek doesn't consume
+    const peeked = bus.peekKey().?;
+    try std.testing.expectEqual(@as(u8, 0x48), peeked.scancode);
+    try std.testing.expectEqual(@as(u8, 0x00), peeked.ascii);
+    try std.testing.expect(bus.hasKey());
+
+    // Pop consumes
+    const popped = bus.popKey().?;
+    try std.testing.expectEqual(@as(u8, 0x48), popped.scancode);
+    try std.testing.expect(!bus.hasKey());
+    try std.testing.expect(bus.popKey() == null);
+}
+
+test "keyboard buffer wraps and rejects when full" {
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    // Fill buffer (15 entries, since circular buffer of 16 wastes one slot)
+    var i: u8 = 0;
+    while (i < 15) : (i += 1) {
+        try std.testing.expect(bus.pushKey(i, i));
+    }
+    // 16th push should fail (full)
+    try std.testing.expect(!bus.pushKey(0xFF, 0xFF));
+
+    // Pop all and verify order
+    i = 0;
+    while (i < 15) : (i += 1) {
+        const key = bus.popKey().?;
+        try std.testing.expectEqual(i, key.scancode);
+    }
+    try std.testing.expect(bus.popKey() == null);
+}
+
+test "writeTextCell writes char+attr to VRAM" {
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    bus.writeTextCell(0, 0, 'A', 0x1F); // row 0, col 0
+    try std.testing.expectEqual(@as(u8, 'A'), bus.mem[Bus.TEXT_VRAM_BASE]);
+    try std.testing.expectEqual(@as(u8, 0x1F), bus.mem[Bus.TEXT_VRAM_BASE + 1]);
+
+    // Row 1, col 5 = offset (1*80+5)*2 = 170
+    bus.writeTextCell(1, 5, 'B', 0x07);
+    try std.testing.expectEqual(@as(u8, 'B'), bus.mem[Bus.TEXT_VRAM_BASE + 170]);
+    try std.testing.expectEqual(@as(u8, 0x07), bus.mem[Bus.TEXT_VRAM_BASE + 171]);
+}
+
+test "advanceCursor wraps at column 80" {
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    bus.cursor_row = 0;
+    bus.cursor_col = 79;
+    bus.advanceCursor();
+    try std.testing.expectEqual(@as(u8, 0), bus.cursor_col);
+    try std.testing.expectEqual(@as(u8, 1), bus.cursor_row);
+}
+
+test "advanceCursor scrolls at row 25" {
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    // Put recognizable data in row 1
+    bus.writeTextCell(1, 0, 'X', 0x4E);
+    bus.cursor_row = 24;
+    bus.cursor_col = 79;
+    bus.advanceCursor();
+
+    // Should have scrolled: cursor stays at row 24, col 0
+    try std.testing.expectEqual(@as(u8, 0), bus.cursor_col);
+    try std.testing.expectEqual(@as(u8, 24), bus.cursor_row);
+
+    // Row 1 data should now be at row 0 (scrolled up)
+    try std.testing.expectEqual(@as(u8, 'X'), bus.mem[Bus.TEXT_VRAM_BASE]);
+    try std.testing.expectEqual(@as(u8, 0x4E), bus.mem[Bus.TEXT_VRAM_BASE + 1]);
+}
+
+test "scrollUp moves rows up and clears last row" {
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    // Write to row 1, col 0
+    bus.writeTextCell(1, 0, 'Z', 0x0A);
+    // Write to row 24, col 0
+    bus.writeTextCell(24, 0, '!', 0xFF);
+
+    bus.scrollUp();
+
+    // Row 1 should now be at row 0
+    try std.testing.expectEqual(@as(u8, 'Z'), bus.mem[Bus.TEXT_VRAM_BASE]);
+    try std.testing.expectEqual(@as(u8, 0x0A), bus.mem[Bus.TEXT_VRAM_BASE + 1]);
+
+    // Row 24 should be cleared (space + default attr)
+    const last_row_addr = Bus.TEXT_VRAM_BASE + 24 * 160;
+    try std.testing.expectEqual(@as(u8, 0x20), bus.mem[last_row_addr]);
+    try std.testing.expectEqual(@as(u8, 0x07), bus.mem[last_row_addr + 1]);
+}
+
+test "reset clears video and keyboard state" {
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    bus.video_mode = 0x13;
+    bus.cursor_row = 10;
+    bus.cursor_col = 40;
+    _ = bus.pushKey(0x1C, 0x0D);
+    bus.waiting_for_key = true;
+
+    bus.reset();
+
+    try std.testing.expectEqual(@as(u8, 0x03), bus.video_mode);
+    try std.testing.expectEqual(@as(u8, 0), bus.cursor_row);
+    try std.testing.expectEqual(@as(u8, 0), bus.cursor_col);
+    try std.testing.expect(!bus.hasKey());
+    try std.testing.expect(!bus.waiting_for_key);
+}

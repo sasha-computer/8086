@@ -2309,3 +2309,197 @@ test "PUSH/POP AX" {
     try std.testing.expectEqual(@as(u16, 0xBEEF), cpu.bx.word);
     try std.testing.expectEqual(@as(u16, 0x0100), cpu.sp);
 }
+
+// --- INT 10h / INT 16h tests (WASM-only intercepts, tested via handleInt10/handleInt16 directly) ---
+
+test "INT 10h AH=0Eh teletype output writes to VRAM and advances cursor" {
+    var cpu = Cpu.init();
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    // Set up INT 10h AH=0Eh AL='H'
+    cpu.ax.parts.hi = 0x0E;
+    cpu.ax.parts.lo = 'H';
+    bus.cursor_row = 0;
+    bus.cursor_col = 0;
+
+    const result = handleInt10(&cpu, &bus);
+    try std.testing.expectEqual(ExecResult.ok, result);
+
+    // Character should be in VRAM at row 0, col 0
+    try std.testing.expectEqual(@as(u8, 'H'), bus.mem[Bus.TEXT_VRAM_BASE]);
+    try std.testing.expectEqual(@as(u8, 0x07), bus.mem[Bus.TEXT_VRAM_BASE + 1]);
+
+    // Cursor should have advanced
+    try std.testing.expectEqual(@as(u8, 0), bus.cursor_row);
+    try std.testing.expectEqual(@as(u8, 1), bus.cursor_col);
+}
+
+test "INT 10h AH=0Eh handles CR and LF" {
+    var cpu = Cpu.init();
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    bus.cursor_row = 5;
+    bus.cursor_col = 30;
+
+    // CR should reset column to 0
+    cpu.ax.parts.hi = 0x0E;
+    cpu.ax.parts.lo = 0x0D;
+    _ = handleInt10(&cpu, &bus);
+    try std.testing.expectEqual(@as(u8, 0), bus.cursor_col);
+    try std.testing.expectEqual(@as(u8, 5), bus.cursor_row);
+
+    // LF should advance row
+    cpu.ax.parts.lo = 0x0A;
+    _ = handleInt10(&cpu, &bus);
+    try std.testing.expectEqual(@as(u8, 6), bus.cursor_row);
+}
+
+test "INT 10h AH=02h sets cursor position" {
+    var cpu = Cpu.init();
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    cpu.ax.parts.hi = 0x02;
+    cpu.dx.parts.hi = 12; // row
+    cpu.dx.parts.lo = 40; // col
+    cpu.bx.parts.hi = 0;  // page
+
+    _ = handleInt10(&cpu, &bus);
+
+    try std.testing.expectEqual(@as(u8, 12), bus.cursor_row);
+    try std.testing.expectEqual(@as(u8, 40), bus.cursor_col);
+}
+
+test "INT 10h AH=03h gets cursor position" {
+    var cpu = Cpu.init();
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    bus.cursor_row = 10;
+    bus.cursor_col = 20;
+    cpu.ax.parts.hi = 0x03;
+    cpu.bx.parts.hi = 0;
+
+    _ = handleInt10(&cpu, &bus);
+
+    try std.testing.expectEqual(@as(u8, 10), cpu.dx.parts.hi);
+    try std.testing.expectEqual(@as(u8, 20), cpu.dx.parts.lo);
+}
+
+test "INT 10h AH=00h sets video mode and clears screen" {
+    var cpu = Cpu.init();
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    // Write something to VRAM
+    bus.mem[Bus.TEXT_VRAM_BASE] = 'X';
+    bus.cursor_row = 10;
+    bus.cursor_col = 40;
+
+    // Set mode 03h
+    cpu.ax.parts.hi = 0x00;
+    cpu.ax.parts.lo = 0x03;
+    _ = handleInt10(&cpu, &bus);
+
+    try std.testing.expectEqual(@as(u8, 0x03), bus.video_mode);
+    try std.testing.expectEqual(@as(u8, 0), bus.cursor_row);
+    try std.testing.expectEqual(@as(u8, 0), bus.cursor_col);
+    // VRAM should be cleared to spaces
+    try std.testing.expectEqual(@as(u8, 0x20), bus.mem[Bus.TEXT_VRAM_BASE]);
+}
+
+test "INT 10h AH=09h writes char+attr at cursor" {
+    var cpu = Cpu.init();
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    bus.cursor_row = 2;
+    bus.cursor_col = 5;
+    cpu.ax.parts.hi = 0x09;
+    cpu.ax.parts.lo = '#';  // char
+    cpu.bx.parts.lo = 0x4E; // attr (yellow on red)
+    cpu.cx.word = 3;        // count
+
+    _ = handleInt10(&cpu, &bus);
+
+    // Check 3 consecutive cells starting at (2, 5)
+    const base = Bus.TEXT_VRAM_BASE + (2 * 80 + 5) * 2;
+    for (0..3) |i| {
+        try std.testing.expectEqual(@as(u8, '#'), bus.mem[base + i * 2]);
+        try std.testing.expectEqual(@as(u8, 0x4E), bus.mem[base + i * 2 + 1]);
+    }
+}
+
+test "INT 10h AH=0Fh returns current video mode" {
+    var cpu = Cpu.init();
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    bus.video_mode = 0x03;
+    bus.active_page = 0;
+    cpu.ax.parts.hi = 0x0F;
+
+    _ = handleInt10(&cpu, &bus);
+
+    try std.testing.expectEqual(@as(u8, 0x03), cpu.ax.parts.lo);
+    try std.testing.expectEqual(@as(u8, 80), cpu.ax.parts.hi);
+    try std.testing.expectEqual(@as(u8, 0), cpu.bx.parts.hi);
+}
+
+test "INT 16h AH=00h returns key from buffer" {
+    var cpu = Cpu.init();
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    _ = bus.pushKey(0x1C, 0x0D); // Enter key
+    cpu.ax.parts.hi = 0x00;
+
+    const result = handleInt16(&cpu, &bus);
+    try std.testing.expectEqual(ExecResult.ok, result);
+    try std.testing.expectEqual(@as(u8, 0x1C), cpu.ax.parts.hi);
+    try std.testing.expectEqual(@as(u8, 0x0D), cpu.ax.parts.lo);
+    try std.testing.expect(!bus.hasKey());
+}
+
+test "INT 16h AH=00h blocks when buffer empty" {
+    var cpu = Cpu.init();
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    cpu.ip = 0x0050; // Pretend IP is after the INT 16h instruction
+    cpu.ax.parts.hi = 0x00;
+
+    const result = handleInt16(&cpu, &bus);
+    try std.testing.expectEqual(ExecResult.halt, result);
+    try std.testing.expect(bus.waiting_for_key);
+    // IP should be rewound by 2 (to re-execute INT 16h)
+    try std.testing.expectEqual(@as(u16, 0x004E), cpu.ip);
+}
+
+test "INT 16h AH=01h peeks without consuming" {
+    var cpu = Cpu.init();
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    _ = bus.pushKey(0x39, 0x20); // Space key
+    cpu.ax.parts.hi = 0x01;
+
+    _ = handleInt16(&cpu, &bus);
+    try std.testing.expect(!cpu.flags.zero); // key available
+    try std.testing.expectEqual(@as(u8, 0x39), cpu.ax.parts.hi);
+    try std.testing.expectEqual(@as(u8, 0x20), cpu.ax.parts.lo);
+    // Key should still be in buffer
+    try std.testing.expect(bus.hasKey());
+}
+
+test "INT 16h AH=01h sets ZF when buffer empty" {
+    var cpu = Cpu.init();
+    var bus = Bus.init();
+    defer bus.deinit();
+
+    cpu.ax.parts.hi = 0x01;
+    _ = handleInt16(&cpu, &bus);
+    try std.testing.expect(cpu.flags.zero);
+}
