@@ -437,16 +437,30 @@
     let prevRegs = new Uint16Array(14);
 
     async function boot() {
-      const { instance } = await WebAssembly.instantiateStreaming(fetch('emu8086.wasm'));
-      emu = instance.exports;
-      mem = new Uint8Array(emu.memory.buffer);
-      setStatus('idle', 'idle');
-      $('file-input').addEventListener('change', loadFile);
-      $('btn-step').addEventListener('click', doStep);
-      $('btn-run').addEventListener('click', doRun);
-      $('btn-pause').addEventListener('click', doPause);
-      $('btn-reset').addEventListener('click', doReset);
-      $('mem-addr').addEventListener('input', updateMemory);
+      try {
+        let instance;
+        try {
+          ({ instance } = await WebAssembly.instantiateStreaming(fetch('emu8086.wasm')));
+        } catch {
+          // Fallback for file:// or servers without correct MIME type
+          const resp = await fetch('emu8086.wasm');
+          const bytes = await resp.arrayBuffer();
+          ({ instance } = await WebAssembly.instantiate(bytes));
+        }
+        emu = instance.exports;
+        mem = new Uint8Array(emu.memory.buffer);
+        setStatus('idle', 'idle');
+        $('file-input').addEventListener('change', loadFile);
+        $('btn-step').addEventListener('click', doStep);
+        $('btn-run').addEventListener('click', doRun);
+        $('btn-pause').addEventListener('click', doPause);
+        $('btn-reset').addEventListener('click', doReset);
+        $('mem-addr').addEventListener('input', updateMemory);
+      } catch (err) {
+        console.error('Failed to load WASM:', err);
+        setStatus('halted', 'error');
+        $('filename').textContent = 'WASM load failed';
+      }
     }
 
     async function loadFile(e) {
@@ -585,7 +599,7 @@
       $('btn-reset').disabled = !loaded;
     }
 
-    boot();
+    boot().catch(err => console.error('boot failed:', err));
   </script>
 </body>
 </html>
