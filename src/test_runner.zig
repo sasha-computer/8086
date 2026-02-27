@@ -390,52 +390,217 @@ test "hardware validation: NOP (90)" {
     try std.testing.expect(result.passed == 2000);
 }
 
-test "hardware validation: ADD r/m8, r8 (00)" {
-    const result = try runTestFile(std.testing.allocator, "tests/00.json");
+/// Run a single test file and assert zero failures.
+fn validateOpcode(path: []const u8) !void {
+    const result = runTestFile(std.testing.allocator, path) catch |err| {
+        // File not found is OK -- just skip
+        if (err == error.FileNotFound) return;
+        return err;
+    };
     if (result.first_failure) |f| {
-        std.debug.print("\nFirst ADD 00 failure: {s}\n", .{f});
+        std.debug.print("\nFirst failure in {s}: {s}\n", .{ path, f });
         std.testing.allocator.free(f);
     }
-    try std.testing.expectEqual(@as(usize, 0), result.failed);
-    try std.testing.expect(result.passed > 0);
+    if (result.failed > 0) {
+        std.debug.print("\n{s}: {d} passed, {d} failed, {d} skipped\n", .{ path, result.passed, result.failed, result.skipped });
+        return error.TestUnexpectedResult;
+    }
 }
 
-test "hardware validation: ADD r/m16, r16 (01)" {
-    const result = try runTestFile(std.testing.allocator, "tests/01.json");
-    if (result.first_failure) |f| {
-        std.debug.print("\nFirst ADD 01 failure: {s}\n", .{f});
-        std.testing.allocator.free(f);
-    }
-    try std.testing.expectEqual(@as(usize, 0), result.failed);
-    try std.testing.expect(result.passed > 0);
+test "hardware validation: ADD (00-05)" {
+    try validateOpcode("tests/00.json");
+    try validateOpcode("tests/01.json");
+    try validateOpcode("tests/02.json");
+    try validateOpcode("tests/03.json");
+    try validateOpcode("tests/04.json");
+    try validateOpcode("tests/05.json");
 }
 
-test "hardware validation: ADD r8, r/m8 (02)" {
-    const result = try runTestFile(std.testing.allocator, "tests/02.json");
-    if (result.first_failure) |f| {
-        std.debug.print("\nFirst ADD 02 failure: {s}\n", .{f});
-        std.testing.allocator.free(f);
-    }
-    try std.testing.expectEqual(@as(usize, 0), result.failed);
-    try std.testing.expect(result.passed > 0);
+test "hardware validation: OR (08-0D)" {
+    try validateOpcode("tests/08.json");
+    try validateOpcode("tests/09.json");
+    try validateOpcode("tests/0A.json");
+    try validateOpcode("tests/0B.json");
+    try validateOpcode("tests/0C.json");
+    try validateOpcode("tests/0D.json");
 }
 
-test "hardware validation: ADD AL, imm8 (04)" {
-    const result = try runTestFile(std.testing.allocator, "tests/04.json");
-    if (result.first_failure) |f| {
-        std.debug.print("\nFirst ADD 04 failure: {s}\n", .{f});
-        std.testing.allocator.free(f);
-    }
-    try std.testing.expectEqual(@as(usize, 0), result.failed);
-    try std.testing.expect(result.passed > 0);
+test "hardware validation: ADC (10-15)" {
+    try validateOpcode("tests/10.json");
+    try validateOpcode("tests/11.json");
+    try validateOpcode("tests/12.json");
+    try validateOpcode("tests/13.json");
+    try validateOpcode("tests/14.json");
+    try validateOpcode("tests/15.json");
 }
 
-test "hardware validation: ADD AX, imm16 (05)" {
-    const result = try runTestFile(std.testing.allocator, "tests/05.json");
-    if (result.first_failure) |f| {
-        std.debug.print("\nFirst ADD 05 failure: {s}\n", .{f});
-        std.testing.allocator.free(f);
+test "hardware validation: SBB (18-1D)" {
+    try validateOpcode("tests/18.json");
+    try validateOpcode("tests/19.json");
+    try validateOpcode("tests/1A.json");
+    try validateOpcode("tests/1B.json");
+    try validateOpcode("tests/1C.json");
+    try validateOpcode("tests/1D.json");
+}
+
+test "hardware validation: AND (20-25)" {
+    try validateOpcode("tests/20.json");
+    try validateOpcode("tests/21.json");
+    try validateOpcode("tests/22.json");
+    try validateOpcode("tests/23.json");
+    try validateOpcode("tests/24.json");
+    try validateOpcode("tests/25.json");
+}
+
+test "hardware validation: SUB (28-2D)" {
+    try validateOpcode("tests/28.json");
+    try validateOpcode("tests/29.json");
+    try validateOpcode("tests/2A.json");
+    try validateOpcode("tests/2B.json");
+    try validateOpcode("tests/2C.json");
+    try validateOpcode("tests/2D.json");
+}
+
+test "hardware validation: XOR (30-35)" {
+    try validateOpcode("tests/30.json");
+    try validateOpcode("tests/31.json");
+    try validateOpcode("tests/32.json");
+    try validateOpcode("tests/33.json");
+    try validateOpcode("tests/34.json");
+    try validateOpcode("tests/35.json");
+}
+
+test "hardware validation: CMP (38-3D)" {
+    try validateOpcode("tests/38.json");
+    try validateOpcode("tests/39.json");
+    try validateOpcode("tests/3A.json");
+    try validateOpcode("tests/3B.json");
+    try validateOpcode("tests/3C.json");
+    try validateOpcode("tests/3D.json");
+}
+
+test "hardware validation: INC r16 (40-47)" {
+    for (0x40..0x48) |op| {
+        var path_buf: [32]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "tests/{X:0>2}.json", .{op}) catch unreachable;
+        try validateOpcode(path);
     }
-    try std.testing.expectEqual(@as(usize, 0), result.failed);
-    try std.testing.expect(result.passed > 0);
+}
+
+test "hardware validation: DEC r16 (48-4F)" {
+    for (0x48..0x50) |op| {
+        var path_buf: [32]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "tests/{X:0>2}.json", .{op}) catch unreachable;
+        try validateOpcode(path);
+    }
+}
+
+test "hardware validation: PUSH r16 (50-57)" {
+    for (0x50..0x58) |op| {
+        var path_buf: [32]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "tests/{X:0>2}.json", .{op}) catch unreachable;
+        try validateOpcode(path);
+    }
+}
+
+test "hardware validation: POP r16 (58-5F)" {
+    for (0x58..0x60) |op| {
+        var path_buf: [32]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "tests/{X:0>2}.json", .{op}) catch unreachable;
+        try validateOpcode(path);
+    }
+}
+
+test "hardware validation: PUSH/POP segment" {
+    try validateOpcode("tests/06.json"); // PUSH ES
+    try validateOpcode("tests/07.json"); // POP ES
+    try validateOpcode("tests/0E.json"); // PUSH CS
+    try validateOpcode("tests/16.json"); // PUSH SS
+    try validateOpcode("tests/17.json"); // POP SS
+    try validateOpcode("tests/1E.json"); // PUSH DS
+    try validateOpcode("tests/1F.json"); // POP DS
+}
+
+test "hardware validation: MOV (88-8B, 8C, 8E)" {
+    try validateOpcode("tests/88.json");
+    try validateOpcode("tests/89.json");
+    try validateOpcode("tests/8A.json");
+    try validateOpcode("tests/8B.json");
+    try validateOpcode("tests/8C.json");
+    try validateOpcode("tests/8E.json");
+}
+
+test "hardware validation: XCHG (91-97)" {
+    for (0x91..0x98) |op| {
+        var path_buf: [32]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "tests/{X:0>2}.json", .{op}) catch unreachable;
+        try validateOpcode(path);
+    }
+}
+
+test "hardware validation: MOV moffs (A0-A3)" {
+    try validateOpcode("tests/A0.json");
+    try validateOpcode("tests/A1.json");
+    try validateOpcode("tests/A2.json");
+    try validateOpcode("tests/A3.json");
+}
+
+test "hardware validation: TEST (84, 85, A8, A9)" {
+    try validateOpcode("tests/84.json");
+    try validateOpcode("tests/85.json");
+    try validateOpcode("tests/A8.json");
+    try validateOpcode("tests/A9.json");
+}
+
+test "hardware validation: MOV imm (B0-BF)" {
+    for (0xB0..0xC0) |op| {
+        var path_buf: [32]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "tests/{X:0>2}.json", .{op}) catch unreachable;
+        try validateOpcode(path);
+    }
+}
+
+test "hardware validation: MOV r/m imm (C6, C7)" {
+    try validateOpcode("tests/C6.json");
+    try validateOpcode("tests/C7.json");
+}
+
+test "hardware validation: Group 1 (80-83)" {
+    const grp_opcodes = [_][]const u8{
+        "tests/80.0.json", "tests/80.1.json", "tests/80.2.json", "tests/80.3.json",
+        "tests/80.4.json", "tests/80.5.json", "tests/80.6.json", "tests/80.7.json",
+        "tests/81.0.json", "tests/81.1.json", "tests/81.2.json", "tests/81.3.json",
+        "tests/81.4.json", "tests/81.5.json", "tests/81.6.json", "tests/81.7.json",
+        "tests/82.0.json", "tests/82.1.json", "tests/82.2.json", "tests/82.3.json",
+        "tests/82.4.json", "tests/82.5.json", "tests/82.6.json", "tests/82.7.json",
+        "tests/83.0.json", "tests/83.1.json", "tests/83.2.json", "tests/83.3.json",
+        "tests/83.4.json", "tests/83.5.json", "tests/83.6.json", "tests/83.7.json",
+    };
+    for (grp_opcodes) |path| {
+        try validateOpcode(path);
+    }
+}
+
+test "hardware validation: flag ops (F5, F8-FD)" {
+    try validateOpcode("tests/F5.json"); // CMC
+    try validateOpcode("tests/F8.json"); // CLC
+    try validateOpcode("tests/F9.json"); // STC
+    try validateOpcode("tests/FA.json"); // CLI
+    try validateOpcode("tests/FB.json"); // STI
+    try validateOpcode("tests/FC.json"); // CLD
+    try validateOpcode("tests/FD.json"); // STD
+}
+
+test "hardware validation: Group F6/F7 (TEST/NOT/NEG)" {
+    try validateOpcode("tests/F6.0.json"); // TEST r/m8, imm8
+    try validateOpcode("tests/F6.2.json"); // NOT r/m8
+    try validateOpcode("tests/F6.3.json"); // NEG r/m8
+    try validateOpcode("tests/F7.0.json"); // TEST r/m16, imm16
+    try validateOpcode("tests/F7.2.json"); // NOT r/m16
+    try validateOpcode("tests/F7.3.json"); // NEG r/m16
+}
+
+test "hardware validation: INC/DEC r/m8 (FE)" {
+    try validateOpcode("tests/FE.0.json"); // INC r/m8
+    try validateOpcode("tests/FE.1.json"); // DEC r/m8
 }

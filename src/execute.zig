@@ -758,7 +758,13 @@ fn opPopSeg(comptime reg: u2) fn (*Cpu, *Bus, u8, *const PrefixState) ExecResult
 
 fn opPushReg16(cpu: *Cpu, bus: *Bus, opcode: u8, _: *const PrefixState) ExecResult {
     const reg: u3 = @truncate(opcode & 0x07);
-    push16(cpu, bus, cpu.getReg16(reg));
+    if (reg == 4) {
+        // 8086 PUSH SP quirk: pushes the value of SP AFTER decrement
+        cpu.sp -%= 2;
+        bus.write16(cpu.ss, cpu.sp, cpu.sp);
+    } else {
+        push16(cpu, bus, cpu.getReg16(reg));
+    }
     return .ok;
 }
 
