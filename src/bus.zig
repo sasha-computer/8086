@@ -18,6 +18,33 @@ pub const Bus = struct {
     /// Set by INT 21h AH=4Ch to signal program exit.
     halted: bool = false,
 
+    // --- Video state ---
+
+    /// Current video mode (0x03 = 80x25 text, 0x13 = 320x200 graphics).
+    video_mode: u8 = 0x03,
+
+    /// Cursor position (row 0-24, col 0-79 in text mode).
+    cursor_row: u8 = 0,
+    cursor_col: u8 = 0,
+
+    /// Active display page (most programs use page 0).
+    active_page: u8 = 0,
+
+    // --- Keyboard buffer ---
+
+    /// Circular keyboard buffer: each entry is (scan_code, ascii).
+    /// 16 entries, matching the real BIOS keyboard buffer size.
+    key_buf: [16]KeyEntry = [_]KeyEntry{.{}} ** 16,
+    key_head: u4 = 0,
+    key_tail: u4 = 0,
+
+    /// Whether we are waiting for a key (INT 16h AH=00h blocks).
+    waiting_for_key: bool = false,
+
+    pub const KeyEntry = struct {
+        scancode: u8 = 0,
+        ascii: u8 = 0,
+    };
     const is_wasm = builtin.cpu.arch == .wasm32;
 
     // Static storage for WASM (lives in linear memory, visible to JS).
@@ -51,6 +78,14 @@ pub const Bus = struct {
         @memset(self.output_buf, 0);
         self.output_len = 0;
         self.halted = false;
+        self.video_mode = 0x03;
+        self.cursor_row = 0;
+        self.cursor_col = 0;
+        self.active_page = 0;
+        self.key_buf = [_]KeyEntry{.{}} ** 16;
+        self.key_head = 0;
+        self.key_tail = 0;
+        self.waiting_for_key = false;
     }
 
     /// Append a character to the output buffer.
@@ -114,6 +149,80 @@ pub const Bus = struct {
         self.mem[addr +% 1] = @truncate(val >> 8);
     }
 
+    // --- Keyboard buffer operations ---
+
+    /// Push a key into the buffer. Returns false if buffer is full.
+    pub fn pushKey(self: *Bus, scancode: u8, ascii: u8) bool {
+        const next: u4 = self.key_tail +% 1;
+        if (next == self.key_head) return false; // full
+        self.key_buf[self.key_tail] = .{ .scancode = scancode, .ascii = ascii };
+        self.key_tail = next;
+        return true;
+    }
+
+    /// Peek at the next key without consuming it. Returns null if empty.
+    pub fn peekKey(self: *const Bus) ?KeyEntry {
+        if (self.key_head == self.key_tail) return null;
+        return self.key_buf[self.key_head];
+    }
+
+    /// Consume and return the next key. Returns null if empty.
+    pub fn popKey(self: *Bus) ?KeyEntry {
+        if (self.key_head == self.key_tail) return null;
+        const entry = self.key_buf[self.key_head];
+        self.key_head +%= 1;
+        return entry;
+    }
+
+    /// Check if the keyboard buffer has keys.
+    pub fn hasKey(self: *const Bus) bool {
+        return self.key_head != self.key_tail;
+    }
+
+    // --- Text-mode video helpers ---
+
+    /// Physical address of the text-mode framebuffer (B800:0000 = 0xB8000).
+    pub const TEXT_VRAM_BASE: u20 = 0xB8000;
+
+    /// Write a character + attribute to text VRAM at (row, col).
+    pub fn writeTextCell(self: *Bus, row: u8, col: u8, char: u8, attr: u8) void {
+        const offset: u20 = (@as(u20, row) * 80 + @as(u20, col)) * 2;
+        const addr = TEXT_VRAM_BASE + offset;
+        self.mem[addr] = char;
+        self.mem[addr + 1] = attr;
+    }
+
+    /// Advance cursor by one position, handling line wrap and scrolling.
+    pub fn advanceCursor(self: *Bus) void {
+        self.cursor_col += 1;
+        if (self.cursor_col >= 80) {
+            self.cursor_col = 0;
+            self.cursor_row += 1;
+        }
+        if (self.cursor_row >= 25) {
+            self.scrollUp();
+            self.cursor_row = 24;
+        }
+    }
+
+    /// Scroll the text-mode framebuffer up by one line.
+    pub fn scrollUp(self: *Bus) void {
+        // Copy rows 1-24 to rows 0-23
+        const src_start = TEXT_VRAM_BASE + 160; // row 1
+        const dst_start = TEXT_VRAM_BASE; // row 0
+        const copy_len: u20 = 24 * 160;
+        var i: u20 = 0;
+        while (i < copy_len) : (i += 1) {
+            self.mem[dst_start + i] = self.mem[src_start + i];
+        }
+        // Clear last row (row 24)
+        const last_row = TEXT_VRAM_BASE + 24 * 160;
+        var j: u20 = 0;
+        while (j < 160) : (j += 2) {
+            self.mem[last_row + j] = 0x20; // space
+            self.mem[last_row + j + 1] = 0x07; // default attribute (white on black)
+        }
+    }
     // --- I/O ports (stubs) ---
 
     pub fn inPort8(_: *const Bus, _: u16) u8 {

@@ -101,6 +101,48 @@ export fn get_output_len() u32 {
     return bus.output_len;
 }
 
+/// Push a key into the keyboard buffer (called from JS on keydown).
+/// scancode: 8086 scan code, ascii: ASCII value (0 for extended keys).
+export fn push_key(scancode: u8, ascii: u8) void {
+    _ = bus.pushKey(scancode, ascii);
+    // If the CPU was blocked waiting for a key, resume it.
+    if (bus.waiting_for_key) {
+        bus.waiting_for_key = false;
+        bus.halted = false;
+    }
+}
+
+/// Load a boot sector image at 0000:7C00 (the BIOS boot address).
+/// Sets up registers as the BIOS would when jumping to a boot sector.
+export fn load_boot_sector(offset: u16, len: u16) void {
+    _ = len;
+    // Boot sector loaded at 0000:7C00
+    cpu.cs = 0;
+    cpu.ds = 0;
+    cpu.es = 0;
+    cpu.ss = 0;
+    cpu.ip = offset;
+    cpu.sp = 0x7C00; // Stack grows down below boot sector
+    cpu.dx.parts.lo = 0x80; // DL = first hard drive
+    // Set video mode to 03h (80x25 text)
+    bus.video_mode = 0x03;
+}
+
+/// Return the current video mode.
+export fn get_video_mode() u8 {
+    return bus.video_mode;
+}
+
+/// Return 1 if the CPU is waiting for keyboard input, 0 otherwise.
+export fn is_waiting_for_key() u8 {
+    return if (bus.waiting_for_key) 1 else 0;
+}
+
+/// Return the cursor position as (row << 8 | col).
+export fn get_cursor_pos() u16 {
+    return @as(u16, bus.cursor_row) << 8 | bus.cursor_col;
+}
+
 // Pull in all the modules so tests work when running this as root.
 test {
     _ = @import("cpu.zig");

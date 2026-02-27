@@ -1194,6 +1194,8 @@ fn opInt(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
     // On WASM, intercept DOS interrupts for .COM program support.
     // On native, always go through the IVT for hardware accuracy.
     if (comptime builtin.cpu.arch == .wasm32) {
+        if (vector == 0x10) return handleInt10(cpu, bus);
+        if (vector == 0x16) return handleInt16(cpu, bus);
         if (vector == 0x21) return handleInt21(cpu, bus);
         if (vector == 0x20) {
             bus.halted = true;
@@ -1231,6 +1233,218 @@ fn handleInt21(cpu: *Cpu, bus: *Bus) ExecResult {
         },
         else => {
             // Unhandled INT 21h function -- silently ignore for now
+        },
+    }
+    return .ok;
+}
+
+/// Handle BIOS INT 10h video services.
+fn handleInt10(cpu: *Cpu, bus: *Bus) ExecResult {
+    const func = cpu.ax.parts.hi; // AH = function number
+    switch (func) {
+        0x00 => {
+            // AH=00h: Set video mode (AL = mode)
+            bus.video_mode = cpu.ax.parts.lo;
+            bus.cursor_row = 0;
+            bus.cursor_col = 0;
+            // Clear text VRAM for text modes
+            if (cpu.ax.parts.lo == 0x03 or cpu.ax.parts.lo == 0x02) {
+                var i: u20 = 0;
+                while (i < 4000) : (i += 2) {
+                    bus.mem[Bus.TEXT_VRAM_BASE + i] = 0x20; // space
+                    bus.mem[Bus.TEXT_VRAM_BASE + i + 1] = 0x07; // white on black
+                }
+            }
+        },
+        0x01 => {
+            // AH=01h: Set cursor shape -- ignore, we draw a block cursor
+        },
+        0x02 => {
+            // AH=02h: Set cursor position (DH=row, DL=col, BH=page)
+            bus.cursor_row = cpu.dx.parts.hi;
+            bus.cursor_col = cpu.dx.parts.lo;
+            bus.active_page = cpu.bx.parts.hi;
+        },
+        0x03 => {
+            // AH=03h: Get cursor position (BH=page)
+            // Returns: DH=row, DL=col, CH=start scanline, CL=end scanline
+            cpu.dx.parts.hi = bus.cursor_row;
+            cpu.dx.parts.lo = bus.cursor_col;
+            cpu.cx.word = 0x0607; // standard cursor shape
+        },
+        0x05 => {
+            // AH=05h: Set active display page (AL=page)
+            bus.active_page = cpu.ax.parts.lo;
+        },
+        0x06 => {
+            // AH=06h: Scroll window up
+            // AL = lines to scroll (0 = clear entire window)
+            // BH = attribute for blank lines
+            // CX = upper-left (CH=row, CL=col)
+            // DX = lower-right (DH=row, DL=col)
+            const lines = cpu.ax.parts.lo;
+            const attr = cpu.bx.parts.hi;
+            const top = cpu.cx.parts.hi;
+            const bottom = cpu.dx.parts.hi;
+            if (lines == 0) {
+                // Clear the window
+                var r: u8 = top;
+                while (r <= bottom and r < 25) : (r += 1) {
+                    var c: u8 = cpu.cx.parts.lo;
+                    while (c <= cpu.dx.parts.lo and c < 80) : (c += 1) {
+                        bus.writeTextCell(r, c, 0x20, attr);
+                    }
+                }
+            } else {
+                // Scroll up by 'lines' rows
+                var r: u8 = top;
+                while (r <= bottom and r < 25) : (r += 1) {
+                    const src_row = r + lines;
+                    var c: u8 = cpu.cx.parts.lo;
+                    while (c <= cpu.dx.parts.lo and c < 80) : (c += 1) {
+                        if (src_row <= bottom and src_row < 25) {
+                            const src_off: u20 = (@as(u20, src_row) * 80 + @as(u20, c)) * 2;
+                            const ch = bus.mem[Bus.TEXT_VRAM_BASE + src_off];
+                            const a = bus.mem[Bus.TEXT_VRAM_BASE + src_off + 1];
+                            bus.writeTextCell(r, c, ch, a);
+                        } else {
+                            bus.writeTextCell(r, c, 0x20, attr);
+                        }
+                    }
+                }
+            }
+        },
+        0x07 => {
+            // AH=07h: Scroll window down -- similar to 06h but downward
+            // Simplified: just clear window for now
+            const attr = cpu.bx.parts.hi;
+            const top = cpu.cx.parts.hi;
+            const bottom = cpu.dx.parts.hi;
+            var r: u8 = top;
+            while (r <= bottom and r < 25) : (r += 1) {
+                var c: u8 = cpu.cx.parts.lo;
+                while (c <= cpu.dx.parts.lo and c < 80) : (c += 1) {
+                    bus.writeTextCell(r, c, 0x20, attr);
+                }
+            }
+        },
+        0x08 => {
+            // AH=08h: Read character and attribute at cursor
+            const off: u20 = (@as(u20, bus.cursor_row) * 80 + @as(u20, bus.cursor_col)) * 2;
+            cpu.ax.parts.lo = bus.mem[Bus.TEXT_VRAM_BASE + off]; // char
+            cpu.ax.parts.hi = bus.mem[Bus.TEXT_VRAM_BASE + off + 1]; // attr
+        },
+        0x09 => {
+            // AH=09h: Write character and attribute at cursor
+            // AL=char, BH=page, BL=attr, CX=count
+            const ch = cpu.ax.parts.lo;
+            const attr = cpu.bx.parts.lo;
+            var count = cpu.cx.word;
+            var row = bus.cursor_row;
+            var col = bus.cursor_col;
+            while (count > 0) : (count -= 1) {
+                if (row < 25 and col < 80) {
+                    bus.writeTextCell(row, col, ch, attr);
+                }
+                col += 1;
+                if (col >= 80) { col = 0; row += 1; }
+            }
+        },
+        0x0A => {
+            // AH=0Ah: Write character at cursor (attribute unchanged)
+            // AL=char, CX=count
+            const ch = cpu.ax.parts.lo;
+            var count = cpu.cx.word;
+            var row = bus.cursor_row;
+            var col = bus.cursor_col;
+            while (count > 0) : (count -= 1) {
+                if (row < 25 and col < 80) {
+                    const off: u20 = (@as(u20, row) * 80 + @as(u20, col)) * 2;
+                    bus.mem[Bus.TEXT_VRAM_BASE + off] = ch;
+                }
+                col += 1;
+                if (col >= 80) { col = 0; row += 1; }
+            }
+        },
+        0x0E => {
+            // AH=0Eh: Teletype output (write char + advance cursor)
+            // AL=char, BL=foreground color (graphics mode)
+            const ch = cpu.ax.parts.lo;
+            switch (ch) {
+                0x0D => { // CR
+                    bus.cursor_col = 0;
+                },
+                0x0A => { // LF
+                    bus.cursor_row += 1;
+                    if (bus.cursor_row >= 25) {
+                        bus.scrollUp();
+                        bus.cursor_row = 24;
+                    }
+                },
+                0x08 => { // Backspace
+                    if (bus.cursor_col > 0) bus.cursor_col -= 1;
+                },
+                0x07 => { // Bell -- ignore
+                },
+                else => {
+                    bus.writeTextCell(bus.cursor_row, bus.cursor_col, ch, 0x07);
+                    bus.advanceCursor();
+                },
+            }
+            // Also append to output buffer for the Output tab
+            bus.appendOutput(ch);
+        },
+        0x0F => {
+            // AH=0Fh: Get current video mode
+            // Returns: AL=mode, AH=columns, BH=page
+            cpu.ax.parts.lo = bus.video_mode;
+            cpu.ax.parts.hi = 80;
+            cpu.bx.parts.hi = bus.active_page;
+        },
+        else => {
+            // Unhandled INT 10h -- silently ignore
+        },
+    }
+    return .ok;
+}
+
+/// Handle BIOS INT 16h keyboard services.
+fn handleInt16(cpu: *Cpu, bus: *Bus) ExecResult {
+    const func = cpu.ax.parts.hi;
+    switch (func) {
+        0x00 => {
+            // AH=00h: Read key (blocking).
+            // If no key is available, set waiting_for_key and halt.
+            // The WASM host will push a key and re-run.
+            if (bus.popKey()) |key| {
+                cpu.ax.parts.hi = key.scancode;
+                cpu.ax.parts.lo = key.ascii;
+            } else {
+                // No key available: rewind IP to re-execute this INT 16h
+                // when the host resumes after pushing a key.
+                cpu.ip -%= 2; // back over CD 16
+                bus.waiting_for_key = true;
+                return .halt;
+            }
+        },
+        0x01 => {
+            // AH=01h: Check key buffer (non-blocking).
+            // ZF=1 if no key, ZF=0 if key ready. Key stays in buffer.
+            if (bus.peekKey()) |key| {
+                cpu.flags.zero = false;
+                cpu.ax.parts.hi = key.scancode;
+                cpu.ax.parts.lo = key.ascii;
+            } else {
+                cpu.flags.zero = true;
+            }
+        },
+        0x02 => {
+            // AH=02h: Get shift key status.
+            // Returns AL with shift flags -- return 0 (no modifiers).
+            cpu.ax.parts.lo = 0;
+        },
+        else => {
+            // Unhandled INT 16h -- silently ignore
         },
     }
     return .ok;
