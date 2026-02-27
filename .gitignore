@@ -1,1 +1,6 @@
-.zig-cache/\nzig-out/\ntests/\n*.o\n*.bin
+.zig-cache/
+zig-out/
+tests/
+*.o
+*.bin
+web/emu8086.wasm
