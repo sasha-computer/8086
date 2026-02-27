@@ -1,22 +1,64 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 /// 1MB memory bus for the 8086.
 ///
 /// The 8086 has a 20-bit address space (1,048,576 bytes). Segment:offset
 /// addressing is resolved here: physical = segment * 16 + offset.
 ///
-/// I/O ports are stubbed for now (Phase 8).
+/// On native targets the memory is heap-allocated via page_allocator.
+/// On wasm32 it lives as a static array in linear memory.
 pub const Bus = struct {
     mem: *[1048576]u8,
 
+    /// Output buffer for INT 21h text output (readable from JS via pointer).
+    output_buf: *[4096]u8,
+    output_len: u32 = 0,
+
+    /// Set by INT 21h AH=4Ch to signal program exit.
+    halted: bool = false,
+
+    const is_wasm = builtin.cpu.arch == .wasm32;
+
+    // Static storage for WASM (lives in linear memory, visible to JS).
+    var static_mem: [1048576]u8 = [_]u8{0} ** 1048576;
+    var static_output: [4096]u8 = [_]u8{0} ** 4096;
+
     pub fn init() Bus {
-        const mem = std.heap.page_allocator.create([1048576]u8) catch @panic("out of memory");
-        @memset(mem, 0);
-        return .{ .mem = mem };
+        if (is_wasm) {
+            return .{
+                .mem = &static_mem,
+                .output_buf = &static_output,
+            };
+        } else {
+            const mem = std.heap.page_allocator.create([1048576]u8) catch @panic("out of memory");
+            @memset(mem, 0);
+            const out = std.heap.page_allocator.create([4096]u8) catch @panic("out of memory");
+            @memset(out, 0);
+            return .{ .mem = mem, .output_buf = out };
+        }
     }
 
     pub fn deinit(self: *Bus) void {
-        std.heap.page_allocator.destroy(self.mem);
+        if (!is_wasm) {
+            std.heap.page_allocator.destroy(self.mem);
+            std.heap.page_allocator.destroy(self.output_buf);
+        }
+    }
+
+    pub fn reset(self: *Bus) void {
+        @memset(self.mem, 0);
+        @memset(self.output_buf, 0);
+        self.output_len = 0;
+        self.halted = false;
+    }
+
+    /// Append a character to the output buffer.
+    pub fn appendOutput(self: *Bus, ch: u8) void {
+        if (self.output_len < self.output_buf.len) {
+            self.output_buf[self.output_len] = ch;
+            self.output_len += 1;
+        }
     }
 
     /// Compute 20-bit physical address from segment:offset.

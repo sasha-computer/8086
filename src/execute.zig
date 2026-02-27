@@ -4,6 +4,7 @@ const Bus = @import("bus.zig").Bus;
 const Decoder = @import("decode.zig").Decoder;
 const EffectiveAddress = @import("decode.zig").EffectiveAddress;
 const flags_mod = @import("flags.zig");
+const builtin = @import("builtin");
 
 /// Execution result.
 pub const ExecResult = enum {
@@ -1190,7 +1191,48 @@ fn opRetFarImm(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
 
 fn opInt(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
     const vector = Decoder.fetchByte(cpu, bus);
+    // On WASM, intercept DOS interrupts for .COM program support.
+    // On native, always go through the IVT for hardware accuracy.
+    if (comptime builtin.cpu.arch == .wasm32) {
+        if (vector == 0x21) return handleInt21(cpu, bus);
+        if (vector == 0x20) {
+            bus.halted = true;
+            return .halt;
+        }
+    }
     doInterrupt(cpu, bus, vector);
+    return .ok;
+}
+
+/// Handle DOS INT 21h services (minimal subset for .COM programs).
+fn handleInt21(cpu: *Cpu, bus: *Bus) ExecResult {
+    const func = cpu.ax.parts.hi; // AH = function number
+    switch (func) {
+        0x02 => {
+            // AH=02h: Write character to stdout (DL = character)
+            bus.appendOutput(cpu.dx.parts.lo);
+        },
+        0x09 => {
+            // AH=09h: Write string to stdout (DS:DX -> '$'-terminated string)
+            var offset = cpu.dx.word;
+            while (true) {
+                const ch = bus.read8(cpu.ds, offset);
+                if (ch == '$') break;
+                bus.appendOutput(ch);
+                offset +%= 1;
+                // Safety: stop after 4K chars to prevent infinite loops
+                if (bus.output_len >= bus.output_buf.len) break;
+            }
+        },
+        0x4C => {
+            // AH=4Ch: Terminate program (AL = return code)
+            bus.halted = true;
+            return .halt;
+        },
+        else => {
+            // Unhandled INT 21h function -- silently ignore for now
+        },
+    }
     return .ok;
 }
 

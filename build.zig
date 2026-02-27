@@ -35,4 +35,24 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(exe_tests).step);
+
+    // zig build wasm -- Build WASM module for browser
+    const wasm = b.addExecutable(.{
+        .name = "emu8086",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/wasm_api.zig"),
+            .target = b.resolveTargetQuery(.{
+                .cpu_arch = .wasm32,
+                .os_tag = .freestanding,
+            }),
+            .optimize = .ReleaseSmall,
+        }),
+    });
+    wasm.entry = .disabled;
+    wasm.rdynamic = true;
+
+    const install_wasm = b.addInstallArtifact(wasm, .{
+        .dest_dir = .{ .override = .{ .custom = "web" } },
+    });
+    b.step("wasm", "Build WASM module for browser").dependOn(&install_wasm.step);
 }
