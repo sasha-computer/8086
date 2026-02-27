@@ -218,6 +218,94 @@ fn getHandler(opcode: u8) OpHandler {
         // POP r16
         0x58...0x5F => &opPopReg16,
 
+        // --- Control Flow ---
+
+        // JMP short (EB)
+        0xEB => &opJmpShort,
+        // JMP near (E9)
+        0xE9 => &opJmpNear,
+        // JMP far (EA)
+        0xEA => &opJmpFar,
+
+        // Jcc short
+        0x70 => &makeJcc(0), // JO
+        0x71 => &makeJcc(1), // JNO
+        0x72 => &makeJcc(2), // JB/JC/JNAE
+        0x73 => &makeJcc(3), // JNB/JNC/JAE
+        0x74 => &makeJcc(4), // JZ/JE
+        0x75 => &makeJcc(5), // JNZ/JNE
+        0x76 => &makeJcc(6), // JBE/JNA
+        0x77 => &makeJcc(7), // JNBE/JA
+        0x78 => &makeJcc(8), // JS
+        0x79 => &makeJcc(9), // JNS
+        0x7A => &makeJcc(10), // JP/JPE
+        0x7B => &makeJcc(11), // JNP/JPO
+        0x7C => &makeJcc(12), // JL/JNGE
+        0x7D => &makeJcc(13), // JNL/JGE
+        0x7E => &makeJcc(14), // JLE/JNG
+        0x7F => &makeJcc(15), // JNLE/JG
+
+        // LOOP/LOOPx/JCXZ
+        0xE0 => &opLoopnz,
+        0xE1 => &opLoopz,
+        0xE2 => &opLoop,
+        0xE3 => &opJcxz,
+
+        // CALL near (E8)
+        0xE8 => &opCallNear,
+        // RET near (C3)
+        0xC3 => &opRetNear,
+        // RET near imm16 (C2)
+        0xC2 => &opRetNearImm,
+        // CALL far (9A)
+        0x9A => &opCallFar,
+        // RET far (CB)
+        0xCB => &opRetFar,
+        // RET far imm16 (CA)
+        0xCA => &opRetFarImm,
+
+        // INT imm8 (CD)
+        0xCD => &opInt,
+        // INT 3 (CC)
+        0xCC => &opInt3,
+        // INTO (CE)
+        0xCE => &opInto,
+        // IRET (CF)
+        0xCF => &opIret,
+
+        // --- Data Movement & Misc (Phase 5) ---
+
+        // XCHG r/m8, r8 (86)
+        0x86 => &opXchgRM(.byte),
+        // XCHG r/m16, r16 (87)
+        0x87 => &opXchgRM(.word),
+
+        // LEA (8D)
+        0x8D => &opLea,
+        // LDS (C5)
+        0xC5 => &opLds,
+        // LES (C4)
+        0xC4 => &opLes,
+
+        // LAHF (9F)
+        0x9F => &opLahf,
+        // SAHF (9E)
+        0x9E => &opSahf,
+        // PUSHF (9C)
+        0x9C => &opPushf,
+        // POPF (9D)
+        0x9D => &opPopf,
+
+        // CBW (98)
+        0x98 => &opCbw,
+        // CWD (99)
+        0x99 => &opCwd,
+        // XLAT (D7)
+        0xD7 => &opXlat,
+
+        // FF group: INC/DEC/CALL/JMP/PUSH r/m16
+        0xFF => &opGrpFF,
+
         else => &opUnimplemented,
     };
 }
@@ -812,6 +900,355 @@ fn opSti(cpu: *Cpu, _: *Bus, _: u8, _: *const PrefixState) ExecResult {
     return .ok;
 }
 
+// --- Control Flow ---
+
+fn opJmpShort(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const disp: i8 = @bitCast(Decoder.fetchByte(cpu, bus));
+    cpu.ip = cpu.ip +% @as(u16, @bitCast(@as(i16, disp)));
+    return .ok;
+}
+
+fn opJmpNear(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const disp: i16 = @bitCast(Decoder.fetchWord(cpu, bus));
+    cpu.ip = cpu.ip +% @as(u16, @bitCast(disp));
+    return .ok;
+}
+
+fn opJmpFar(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const offset = Decoder.fetchWord(cpu, bus);
+    const segment = Decoder.fetchWord(cpu, bus);
+    cpu.ip = offset;
+    cpu.cs = segment;
+    return .ok;
+}
+
+fn evalCondition(cpu: *const Cpu, cond: u4) bool {
+    return switch (cond) {
+        0 => cpu.flags.overflow, // JO
+        1 => !cpu.flags.overflow, // JNO
+        2 => cpu.flags.carry, // JB/JC
+        3 => !cpu.flags.carry, // JNB/JNC/JAE
+        4 => cpu.flags.zero, // JZ/JE
+        5 => !cpu.flags.zero, // JNZ/JNE
+        6 => cpu.flags.carry or cpu.flags.zero, // JBE/JNA
+        7 => !cpu.flags.carry and !cpu.flags.zero, // JNBE/JA
+        8 => cpu.flags.sign, // JS
+        9 => !cpu.flags.sign, // JNS
+        10 => cpu.flags.parity, // JP/JPE
+        11 => !cpu.flags.parity, // JNP/JPO
+        12 => cpu.flags.sign != cpu.flags.overflow, // JL/JNGE
+        13 => cpu.flags.sign == cpu.flags.overflow, // JNL/JGE
+        14 => cpu.flags.zero or (cpu.flags.sign != cpu.flags.overflow), // JLE/JNG
+        15 => !cpu.flags.zero and (cpu.flags.sign == cpu.flags.overflow), // JNLE/JG
+    };
+}
+
+fn makeJcc(comptime cond: u4) fn (*Cpu, *Bus, u8, *const PrefixState) ExecResult {
+    return struct {
+        fn handler(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+            const disp: i8 = @bitCast(Decoder.fetchByte(cpu, bus));
+            if (evalCondition(cpu, cond)) {
+                cpu.ip = cpu.ip +% @as(u16, @bitCast(@as(i16, disp)));
+            }
+            return .ok;
+        }
+    }.handler;
+}
+
+fn opLoop(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const disp: i8 = @bitCast(Decoder.fetchByte(cpu, bus));
+    cpu.cx.word -%= 1;
+    if (cpu.cx.word != 0) {
+        cpu.ip = cpu.ip +% @as(u16, @bitCast(@as(i16, disp)));
+    }
+    return .ok;
+}
+
+fn opLoopz(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const disp: i8 = @bitCast(Decoder.fetchByte(cpu, bus));
+    cpu.cx.word -%= 1;
+    if (cpu.cx.word != 0 and cpu.flags.zero) {
+        cpu.ip = cpu.ip +% @as(u16, @bitCast(@as(i16, disp)));
+    }
+    return .ok;
+}
+
+fn opLoopnz(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const disp: i8 = @bitCast(Decoder.fetchByte(cpu, bus));
+    cpu.cx.word -%= 1;
+    if (cpu.cx.word != 0 and !cpu.flags.zero) {
+        cpu.ip = cpu.ip +% @as(u16, @bitCast(@as(i16, disp)));
+    }
+    return .ok;
+}
+
+fn opJcxz(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const disp: i8 = @bitCast(Decoder.fetchByte(cpu, bus));
+    if (cpu.cx.word == 0) {
+        cpu.ip = cpu.ip +% @as(u16, @bitCast(@as(i16, disp)));
+    }
+    return .ok;
+}
+
+fn opCallNear(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const disp: i16 = @bitCast(Decoder.fetchWord(cpu, bus));
+    push16(cpu, bus, cpu.ip);
+    cpu.ip = cpu.ip +% @as(u16, @bitCast(disp));
+    return .ok;
+}
+
+fn opRetNear(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    cpu.ip = pop16(cpu, bus);
+    return .ok;
+}
+
+fn opRetNearImm(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const imm = Decoder.fetchWord(cpu, bus);
+    cpu.ip = pop16(cpu, bus);
+    cpu.sp +%= imm;
+    return .ok;
+}
+
+fn opCallFar(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const offset = Decoder.fetchWord(cpu, bus);
+    const segment = Decoder.fetchWord(cpu, bus);
+    push16(cpu, bus, cpu.cs);
+    push16(cpu, bus, cpu.ip);
+    cpu.cs = segment;
+    cpu.ip = offset;
+    return .ok;
+}
+
+fn opRetFar(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    cpu.ip = pop16(cpu, bus);
+    cpu.cs = pop16(cpu, bus);
+    return .ok;
+}
+
+fn opRetFarImm(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const imm = Decoder.fetchWord(cpu, bus);
+    cpu.ip = pop16(cpu, bus);
+    cpu.cs = pop16(cpu, bus);
+    cpu.sp +%= imm;
+    return .ok;
+}
+
+fn opInt(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const vector = Decoder.fetchByte(cpu, bus);
+    doInterrupt(cpu, bus, vector);
+    return .ok;
+}
+
+fn opInt3(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    doInterrupt(cpu, bus, 3);
+    return .ok;
+}
+
+fn opInto(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    if (cpu.flags.overflow) {
+        doInterrupt(cpu, bus, 4);
+    }
+    return .ok;
+}
+
+fn opIret(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    cpu.ip = pop16(cpu, bus);
+    cpu.cs = pop16(cpu, bus);
+    cpu.flags = Cpu.Flags.unpack(pop16(cpu, bus));
+    return .ok;
+}
+
+fn doInterrupt(cpu: *Cpu, bus: *Bus, vector: u8) void {
+    push16(cpu, bus, cpu.flags.pack());
+    cpu.flags.interrupt = false;
+    cpu.flags.trap = false;
+    push16(cpu, bus, cpu.cs);
+    push16(cpu, bus, cpu.ip);
+    // Read IVT entry: 4 bytes at vector * 4
+    const ivt_addr: u20 = @as(u20, vector) * 4;
+    cpu.ip = bus.readPhys16(ivt_addr);
+    cpu.cs = bus.readPhys16(ivt_addr +% 2);
+}
+
+// FF group: INC/DEC/CALL near indirect/JMP near indirect/CALL far indirect/JMP far indirect/PUSH
+fn opGrpFF(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+    const modrm_byte = Decoder.fetchByte(cpu, bus);
+    const modrm = Decoder.decodeModRM(modrm_byte);
+    const ea = Decoder.resolveModRM(cpu, bus, modrm, prefix.seg_override);
+
+    switch (modrm.reg) {
+        0 => { // INC r/m16
+            const val = readEA(cpu, bus, ea, .word);
+            writeEA(cpu, bus, ea, .word, flags_mod.inc16(&cpu.flags, val));
+        },
+        1 => { // DEC r/m16
+            const val = readEA(cpu, bus, ea, .word);
+            writeEA(cpu, bus, ea, .word, flags_mod.dec16(&cpu.flags, val));
+        },
+        2 => { // CALL near indirect
+            const target = readEA(cpu, bus, ea, .word);
+            push16(cpu, bus, cpu.ip);
+            cpu.ip = target;
+        },
+        3 => { // CALL far indirect
+            switch (ea) {
+                .memory => |m| {
+                    const new_ip = bus.read16(m.segment, m.offset);
+                    const new_cs = bus.read16(m.segment, m.offset +% 2);
+                    push16(cpu, bus, cpu.cs);
+                    push16(cpu, bus, cpu.ip);
+                    cpu.ip = new_ip;
+                    cpu.cs = new_cs;
+                },
+                .register => return .unimplemented,
+            }
+        },
+        4 => { // JMP near indirect
+            cpu.ip = readEA(cpu, bus, ea, .word);
+        },
+        5 => { // JMP far indirect
+            switch (ea) {
+                .memory => |m| {
+                    cpu.ip = bus.read16(m.segment, m.offset);
+                    cpu.cs = bus.read16(m.segment, m.offset +% 2);
+                },
+                .register => return .unimplemented,
+            }
+        },
+        6 => { // PUSH r/m16
+            // 8086 PUSH SP quirk: if source is SP register, push after decrement
+            switch (ea) {
+                .register => |r| {
+                    if (r == 4) { // SP
+                        cpu.sp -%= 2;
+                        bus.write16(cpu.ss, cpu.sp, cpu.sp);
+                    } else {
+                        push16(cpu, bus, cpu.getReg16(r));
+                    }
+                },
+                .memory => |m| {
+                    const val = bus.read16(m.segment, m.offset);
+                    push16(cpu, bus, val);
+                },
+            }
+        },
+        7 => return .unimplemented,
+    }
+    return .ok;
+}
+
+// --- Data Movement (Phase 5) ---
+
+fn opXchgRM(comptime size: OpSize) fn (*Cpu, *Bus, u8, *const PrefixState) ExecResult {
+    return struct {
+        fn handler(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+            const modrm_byte = Decoder.fetchByte(cpu, bus);
+            const modrm = Decoder.decodeModRM(modrm_byte);
+            const ea = Decoder.resolveModRM(cpu, bus, modrm, prefix.seg_override);
+
+            const rm_val = readEA(cpu, bus, ea, size);
+            const reg_val: u16 = switch (size) {
+                .byte => cpu.getReg8(modrm.reg),
+                .word => cpu.getReg16(modrm.reg),
+            };
+
+            writeEA(cpu, bus, ea, size, reg_val);
+            switch (size) {
+                .byte => cpu.setReg8(modrm.reg, @truncate(rm_val)),
+                .word => cpu.setReg16(modrm.reg, rm_val),
+            }
+
+            return .ok;
+        }
+    }.handler;
+}
+
+fn opLea(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+    const modrm_byte = Decoder.fetchByte(cpu, bus);
+    const modrm = Decoder.decodeModRM(modrm_byte);
+    const ea = Decoder.resolveModRM(cpu, bus, modrm, prefix.seg_override);
+    switch (ea) {
+        .memory => |m| cpu.setReg16(modrm.reg, m.offset),
+        .register => {}, // LEA with register source is undefined behavior
+    }
+    return .ok;
+}
+
+fn opLds(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+    const modrm_byte = Decoder.fetchByte(cpu, bus);
+    const modrm = Decoder.decodeModRM(modrm_byte);
+    const ea = Decoder.resolveModRM(cpu, bus, modrm, prefix.seg_override);
+    switch (ea) {
+        .memory => |m| {
+            cpu.setReg16(modrm.reg, bus.read16(m.segment, m.offset));
+            cpu.ds = bus.read16(m.segment, m.offset +% 2);
+        },
+        .register => {},
+    }
+    return .ok;
+}
+
+fn opLes(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+    const modrm_byte = Decoder.fetchByte(cpu, bus);
+    const modrm = Decoder.decodeModRM(modrm_byte);
+    const ea = Decoder.resolveModRM(cpu, bus, modrm, prefix.seg_override);
+    switch (ea) {
+        .memory => |m| {
+            cpu.setReg16(modrm.reg, bus.read16(m.segment, m.offset));
+            cpu.es = bus.read16(m.segment, m.offset +% 2);
+        },
+        .register => {},
+    }
+    return .ok;
+}
+
+fn opLahf(cpu: *Cpu, _: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    cpu.ax.parts.hi = @truncate(cpu.flags.pack());
+    return .ok;
+}
+
+fn opSahf(cpu: *Cpu, _: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    // SAHF loads SF, ZF, AF, PF, CF from AH
+    const ah = cpu.ax.parts.hi;
+    cpu.flags.sign = (ah & 0x80) != 0;
+    cpu.flags.zero = (ah & 0x40) != 0;
+    cpu.flags.aux_carry = (ah & 0x10) != 0;
+    cpu.flags.parity = (ah & 0x04) != 0;
+    cpu.flags.carry = (ah & 0x01) != 0;
+    return .ok;
+}
+
+fn opPushf(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    push16(cpu, bus, cpu.flags.pack());
+    return .ok;
+}
+
+fn opPopf(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    cpu.flags = Cpu.Flags.unpack(pop16(cpu, bus));
+    return .ok;
+}
+
+fn opCbw(cpu: *Cpu, _: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const al: i8 = @bitCast(cpu.ax.parts.lo);
+    cpu.ax.word = @bitCast(@as(i16, al));
+    return .ok;
+}
+
+fn opCwd(cpu: *Cpu, _: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    if (cpu.ax.word & 0x8000 != 0) {
+        cpu.dx.word = 0xFFFF;
+    } else {
+        cpu.dx.word = 0x0000;
+    }
+    return .ok;
+}
+
+fn opXlat(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+    const seg = prefix.seg_override orelse cpu.ds;
+    const offset = cpu.bx.word +% @as(u16, cpu.ax.parts.lo);
+    cpu.ax.parts.lo = bus.read8(seg, offset);
+    return .ok;
+}
 // --- Simple instructions ---
 
 fn opNop(_: *Cpu, _: *Bus, _: u8, _: *const PrefixState) ExecResult {

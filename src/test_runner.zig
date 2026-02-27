@@ -604,3 +604,81 @@ test "hardware validation: INC/DEC r/m8 (FE)" {
     try validateOpcode("tests/FE.0.json"); // INC r/m8
     try validateOpcode("tests/FE.1.json"); // DEC r/m8
 }
+
+// --- Phase 4: Control Flow ---
+
+test "hardware validation: Jcc (70-7F)" {
+    for (0x70..0x80) |op| {
+        var path_buf: [32]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "tests/{X:0>2}.json", .{op}) catch unreachable;
+        try validateOpcode(path);
+    }
+}
+
+test "hardware validation: JMP short/near/far (E9-EB)" {
+    try validateOpcode("tests/EB.json"); // JMP short
+    try validateOpcode("tests/E9.json"); // JMP near
+    try validateOpcode("tests/EA.json"); // JMP far
+}
+
+test "hardware validation: LOOP/LOOPx/JCXZ (E0-E3)" {
+    try validateOpcode("tests/E0.json"); // LOOPNZ
+    try validateOpcode("tests/E1.json"); // LOOPZ
+    try validateOpcode("tests/E2.json"); // LOOP
+    try validateOpcode("tests/E3.json"); // JCXZ
+}
+
+test "hardware validation: CALL/RET near (E8, C2, C3)" {
+    try validateOpcode("tests/E8.json"); // CALL near
+    try validateOpcode("tests/C3.json"); // RET near
+    try validateOpcode("tests/C2.json"); // RET near imm16
+}
+
+test "hardware validation: CALL/RET far (9A, CA, CB)" {
+    try validateOpcode("tests/9A.json"); // CALL far
+    try validateOpcode("tests/CB.json"); // RET far
+    try validateOpcode("tests/CA.json"); // RET far imm16
+}
+
+test "hardware validation: INT/INTO/IRET (CC-CF)" {
+    try validateOpcode("tests/CC.json"); // INT 3
+    try validateOpcode("tests/CD.json"); // INT imm8
+    try validateOpcode("tests/CE.json"); // INTO
+    try validateOpcode("tests/CF.json"); // IRET
+}
+
+test "hardware validation: FF group (INC/DEC/CALL/JMP/PUSH r/m16)" {
+    try validateOpcode("tests/FF.0.json"); // INC
+    try validateOpcode("tests/FF.1.json"); // DEC
+    try validateOpcode("tests/FF.2.json"); // CALL near indirect
+    try validateOpcode("tests/FF.3.json"); // CALL far indirect
+    try validateOpcode("tests/FF.4.json"); // JMP near indirect
+    try validateOpcode("tests/FF.5.json"); // JMP far indirect
+    try validateOpcode("tests/FF.6.json"); // PUSH r/m16
+}
+
+// --- Phase 5: Data Movement ---
+
+test "hardware validation: XCHG r/m (86, 87)" {
+    try validateOpcode("tests/86.json"); // XCHG r/m8, r8
+    try validateOpcode("tests/87.json"); // XCHG r/m16, r16
+}
+
+test "hardware validation: LEA/LDS/LES (8D, C4, C5)" {
+    try validateOpcode("tests/8D.json"); // LEA
+    try validateOpcode("tests/C4.json"); // LES
+    try validateOpcode("tests/C5.json"); // LDS
+}
+
+test "hardware validation: LAHF/SAHF/PUSHF/POPF (9C-9F)" {
+    try validateOpcode("tests/9E.json"); // SAHF
+    try validateOpcode("tests/9F.json"); // LAHF
+    try validateOpcode("tests/9C.json"); // PUSHF
+    try validateOpcode("tests/9D.json"); // POPF
+}
+
+test "hardware validation: CBW/CWD/XLAT (98, 99, D7)" {
+    try validateOpcode("tests/98.json"); // CBW
+    try validateOpcode("tests/99.json"); // CWD
+    try validateOpcode("tests/D7.json"); // XLAT
+}
