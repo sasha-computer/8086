@@ -31,7 +31,7 @@ Tests parse ~700MB of JSON and run hundreds of thousands of individual test case
 | `src/main.zig` | Native CLI entry point |
 | `src/wasm_api.zig` | WASM export layer: 8 exported functions, owns static Cpu and Bus instances |
 | `web/index.html` | Browser frontend. CSS handles all UI interaction (tabs, theming). ~120 lines of JS for WASM bridge only. |
-| `web/serve.py` | Dev server with `application/wasm` MIME type |
+| `web/serve.py` | Dev server with `application/wasm` MIME type (`uv run web/serve.py`) |
 | `web/*.com` | Test .COM binaries (hello, fibonacci, count) |
 
 ## Key patterns

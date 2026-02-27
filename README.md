@@ -14,7 +14,7 @@ Build the WASM module and serve the web frontend:
 ```
 zig build wasm
 cp zig-out/web/emu8086.wasm web/
-cd web && python3 serve.py
+uv run web/serve.py
 ```
 
 Open `http://localhost:8086`, load a `.COM` file, hit Run.
@@ -74,7 +74,7 @@ src/
   wasm_api.zig      WASM export layer (8 functions for browser bridge)
 web/
   index.html        Browser frontend (HTML + CSS + minimal JS WASM shim)
-  serve.py          Dev server with application/wasm MIME type
+  serve.py          Dev server with application/wasm MIME type (uv run web/serve.py)
   *.com             Test .COM binaries
 ```
 
