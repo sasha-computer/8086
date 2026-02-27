@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, interactive-widget=resizes-content">
+  <title>emu8086</title>
+  <style>
+    /* ---- Theme ---- */
+    :root {
+      color-scheme: light dark;
+      --bg: light-dark(#f4f5f7, #0c0e14);
+      --surface: light-dark(#fff, #151820);
+      --surface-2: light-dark(#f0f1f4, #1c2028);
+      --border: light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.06));
+      --text: light-dark(#1a1c24, #dfe1e8);
+      --text-dim: light-dark(#5a5e72, #7a8094);
+      --text-muted: light-dark(#9a9eb2, #4a5068);
+      --accent: light-dark(#0969da, #58a6ff);
+      --accent-dim: light-dark(rgba(9,105,218,0.08), rgba(88,166,255,0.1));
+      --green: light-dark(#1a7f37, #3fb950);
+      --green-dim: light-dark(rgba(26,127,55,0.08), rgba(63,185,80,0.08));
+      --red: light-dark(#cf222e, #f85149);
+      --amber: light-dark(#9a6700, #d29922);
+      --mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+      --sans: system-ui, -apple-system, sans-serif;
+      --radius: 8px;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100svh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ---- Layout ---- */
+    emu-shell {
+      display: flex;
+      flex-direction: column;
+      max-width: 860px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 1.5rem 1rem;
+      gap: 1rem;
+      flex: 1;
+    }
+
+    emu-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      h1 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        font-family: var(--mono);
+      }
+      .badge {
+        font-family: var(--mono);
+        font-size: 0.65rem;
+        font-weight: 500;
+        padding: 0.2em 0.5em;
+        border-radius: 4px;
+        background: var(--accent-dim);
+        color: var(--accent);
+      }
+    }
+
+    /* ---- File loader ---- */
+    emu-loader {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      label[for="file-input"] {
+        font-family: var(--mono);
+        font-size: 0.8rem;
+        padding: 0.4em 0.8em;
+        border-radius: var(--radius);
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+        transition: opacity 0.15s;
+        &:hover { opacity: 0.85; }
+        &:active { opacity: 0.7; }
+      }
+      input[type="file"] {
+        opacity: 0;
+        position: absolute;
+        pointer-events: none;
+      }
+      .filename {
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        color: var(--text-dim);
+      }
+    }
+
+    /* ---- Controls ---- */
+    emu-controls {
+      display: flex;
+      gap: 0.35rem;
+      flex-wrap: wrap;
+      button {
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        padding: 0.35em 0.7em;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface);
+        color: var(--text);
+        cursor: pointer;
+        transition: background 0.1s, border-color 0.1s;
+        &:hover {
+          background: var(--surface-2);
+          border-color: var(--accent);
+        }
+        &:active { opacity: 0.7; }
+        &:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+      }
+      .status {
+        font-family: var(--mono);
+        font-size: 0.75rem;
+        color: var(--text-dim);
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+        margin-left: auto;
+        .dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: var(--text-muted);
+        }
+        &[data-state="running"] .dot { background: var(--green); }
+        &[data-state="halted"] .dot { background: var(--red); }
+        &[data-state="ready"] .dot { background: var(--amber); }
+      }
+    }
+
+    /* ---- Tab bar (pure CSS with radio buttons) ---- */
+    emu-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      gap: 0;
+      label {
+        font-family: var(--mono);
+        font-size: 0.75rem;
+        padding: 0.5em 1em;
+        cursor: pointer;
+        color: var(--text-dim);
+        border-bottom: 2px solid transparent;
+        transition: color 0.15s, border-color 0.15s;
+        &:hover { color: var(--text); }
+        &:has(input:checked) {
+          color: var(--accent);
+          border-bottom-color: var(--accent);
+        }
+        &:has(input:focus-visible) {
+          outline: 2px solid var(--accent);
+          outline-offset: -2px;
+          border-radius: 4px 4px 0 0;
+        }
+        input {
+          opacity: 0;
+          position: absolute;
+          pointer-events: none;
+        }
+      }
+    }
+
+    /* ---- Panels (CSS-only show/hide via :has) ---- */
+    emu-panel {
+      display: none;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: opacity 0.2s;
+      @starting-style { opacity: 0; }
+    }
+
+    body:has(#tab-registers:checked) #panel-registers,
+    body:has(#tab-memory:checked) #panel-memory,
+    body:has(#tab-output:checked) #panel-output {
+      display: block;
+      opacity: 1;
+    }
+
+    /* ---- Register panel ---- */
+    reg-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 1px;
+      background: var(--border);
+    }
+
+    reg-cell {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.4rem 0.6rem;
+      background: var(--surface);
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      .name {
+        color: var(--text-dim);
+        font-weight: 500;
+      }
+      .val {
+        color: var(--text);
+        font-variant-numeric: tabular-nums;
+      }
+      &[data-changed] .val {
+        color: var(--accent);
+      }
+    }
+
+    /* ---- Flags row ---- */
+    flag-row {
+      display: flex;
+      gap: 0.35rem;
+      padding: 0.5rem 0.6rem;
+      flex-wrap: wrap;
+      background: var(--surface);
+    }
+
+    flag-bit {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      padding: 0.15em 0.4em;
+      border-radius: 3px;
+      background: var(--surface-2);
+      color: var(--text-muted);
+      &[data-set] {
+        background: var(--green-dim);
+        color: var(--green);
+      }
+    }
+
+    /* ---- Memory panel ---- */
+    mem-viewer {
+      display: block;
+      padding: 0.5rem;
+    }
+
+    mem-controls {
+      display: flex;
+      gap: 0.4rem;
+      align-items: center;
+      padding: 0.3rem 0.2rem;
+      margin-bottom: 0.4rem;
+      label {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--text-dim);
+      }
+      input[type="text"] {
+        font-family: var(--mono);
+        font-size: 0.75rem;
+        width: 6em;
+        padding: 0.25em 0.4em;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--surface-2);
+        color: var(--text);
+        &:focus {
+          outline: 2px solid var(--accent);
+          outline-offset: -1px;
+        }
+      }
+    }
+
+    mem-hex {
+      display: block;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      line-height: 1.7;
+      overflow-x: auto;
+      white-space: pre;
+      color: var(--text);
+      padding: 0.3rem;
+      .addr {
+        color: var(--text-muted);
+      }
+      .ascii {
+        color: var(--text-dim);
+      }
+    }
+
+    /* ---- Output panel ---- */
+    emu-output {
+      display: block;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      line-height: 1.6;
+      padding: 0.75rem;
+      min-height: 120px;
+      max-height: 300px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      overflow-wrap: break-word;
+      color: var(--text);
+    }
+
+    emu-output:empty::before {
+      content: "Program output will appear here...";
+      color: var(--text-muted);
+      font-style: italic;
+    }
+
+    /* ---- Footer ---- */
+    emu-footer {
+      display: block;
+      text-align: center;
+      padding: 1rem;
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      a {
+        color: var(--accent);
+        text-decoration: none;
+        &:hover { text-decoration: underline; }
+      }
+    }
+
+    /* ---- Responsive ---- */
+    @media (width <= 480px) {
+      emu-shell { padding: 1rem 0.5rem; }
+      reg-grid { grid-template-columns: repeat(2, 1fr); }
+      mem-hex { font-size: 0.65rem; }
+    }
+  </style>
+</head>
+<body>
+  <emu-shell>
+    <emu-header>
+      <h1>emu8086</h1>
+      <span class="badge">WASM</span>
+      <span class="badge">24KB</span>
+    </emu-header>
+
+    <emu-loader>
+      <label for="file-input">Load .COM</label>
+      <input type="file" id="file-input" accept=".com,.COM,.bin">
+      <span class="filename" id="filename">No file loaded</span>
+    </emu-loader>
+
+    <emu-controls>
+      <button id="btn-step" disabled>Step</button>
+      <button id="btn-run" disabled>Run</button>
+      <button id="btn-pause" disabled>Pause</button>
+      <button id="btn-reset" disabled>Reset</button>
+      <div class="status" id="status" data-state="idle">
+        <span class="dot"></span>
+        <span class="label">idle</span>
+      </div>
+    </emu-controls>
+
+    <!-- Tab bar: pure CSS radio buttons for panel switching -->
+    <emu-tabs role="radiogroup" aria-label="View tabs">
+      <label><input type="radio" name="tab" id="tab-registers" checked> Registers</label>
+      <label><input type="radio" name="tab" id="tab-memory"> Memory</label>
+      <label><input type="radio" name="tab" id="tab-output"> Output</label>
+    </emu-tabs>
+
+    <!-- Panels (shown/hidden by CSS :has() on the radio buttons) -->
+    <emu-panel id="panel-registers">
+      <reg-grid id="regs">
+        <reg-cell><span class="name">AX</span><span class="val" id="r-ax">0000</span></reg-cell>
+        <reg-cell><span class="name">BX</span><span class="val" id="r-bx">0000</span></reg-cell>
+        <reg-cell><span class="name">CX</span><span class="val" id="r-cx">0000</span></reg-cell>
+        <reg-cell><span class="name">DX</span><span class="val" id="r-dx">0000</span></reg-cell>
+        <reg-cell><span class="name">SI</span><span class="val" id="r-si">0000</span></reg-cell>
+        <reg-cell><span class="name">DI</span><span class="val" id="r-di">0000</span></reg-cell>
+        <reg-cell><span class="name">BP</span><span class="val" id="r-bp">0000</span></reg-cell>
+        <reg-cell><span class="name">SP</span><span class="val" id="r-sp">0000</span></reg-cell>
+        <reg-cell><span class="name">CS</span><span class="val" id="r-cs">0000</span></reg-cell>
+        <reg-cell><span class="name">DS</span><span class="val" id="r-ds">0000</span></reg-cell>
+        <reg-cell><span class="name">SS</span><span class="val" id="r-ss">0000</span></reg-cell>
+        <reg-cell><span class="name">ES</span><span class="val" id="r-es">0000</span></reg-cell>
+        <reg-cell><span class="name">IP</span><span class="val" id="r-ip">0000</span></reg-cell>
+        <reg-cell><span class="name">FLAGS</span><span class="val" id="r-flags">0000</span></reg-cell>
+      </reg-grid>
+      <flag-row id="flags">
+        <flag-bit data-flag="CF">CF</flag-bit>
+        <flag-bit data-flag="PF">PF</flag-bit>
+        <flag-bit data-flag="AF">AF</flag-bit>
+        <flag-bit data-flag="ZF">ZF</flag-bit>
+        <flag-bit data-flag="SF">SF</flag-bit>
+        <flag-bit data-flag="TF">TF</flag-bit>
+        <flag-bit data-flag="IF">IF</flag-bit>
+        <flag-bit data-flag="DF">DF</flag-bit>
+        <flag-bit data-flag="OF">OF</flag-bit>
+      </flag-row>
+    </emu-panel>
+
+    <emu-panel id="panel-memory">
+      <mem-viewer>
+        <mem-controls>
+          <label for="mem-addr">Address:</label>
+          <input type="text" id="mem-addr" value="0100" placeholder="hex">
+        </mem-controls>
+        <mem-hex id="mem-hex"></mem-hex>
+      </mem-viewer>
+    </emu-panel>
+
+    <emu-panel id="panel-output">
+      <emu-output id="output"></emu-output>
+    </emu-panel>
+
+    <emu-footer>
+      8086 emulator in Zig, compiled to WebAssembly.
+      <a href="https://github.com/SingleStepTests/8086">Test-validated</a> against real silicon.
+    </emu-footer>
+  </emu-shell>
+
+  <!-- Minimal JS: WASM instantiation + data bridge only.
+       All UI interaction (tabs, theming) is pure CSS above. -->
+  <script>
+    const $ = s => document.getElementById(s);
+    const hex16 = v => v.toString(16).toUpperCase().padStart(4, '0');
+    const hex8 = v => v.toString(16).toUpperCase().padStart(2, '0');
+
+    let emu, mem, running = false, animId = null;
+    const regIds = ['ax','bx','cx','dx','si','di','bp','sp','cs','ds','ss','es','ip','flags'];
+    const flagBits = {CF:0, PF:2, AF:4, ZF:6, SF:7, TF:8, IF:9, DF:10, OF:11};
+    let prevRegs = new Uint16Array(14);
+
+    async function boot() {
+      const { instance } = await WebAssembly.instantiateStreaming(fetch('emu8086.wasm'));
+      emu = instance.exports;
+      mem = new Uint8Array(emu.memory.buffer);
+      setStatus('idle', 'idle');
+      $('file-input').addEventListener('change', loadFile);
+      $('btn-step').addEventListener('click', doStep);
+      $('btn-run').addEventListener('click', doRun);
+      $('btn-pause').addEventListener('click', doPause);
+      $('btn-reset').addEventListener('click', doReset);
+      $('mem-addr').addEventListener('input', updateMemory);
+    }
+
+    async function loadFile(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      emu.init();
+      // Write .COM binary at physical address 0x100
+      const base = emu.get_memory_ptr() + 0x100;
+      mem.set(bytes, base);
+      emu.load_program(0x100, bytes.length);
+      $('filename').textContent = file.name;
+      enableButtons(true);
+      setStatus('ready', 'ready');
+      updateUI();
+    }
+
+    function doStep() {
+      const s = emu.step();
+      updateUI();
+      if (s === 1) { setStatus('halted', 'halted'); enableButtons(false); }
+      else if (s === 2) { setStatus('halted', 'unimpl'); enableButtons(false); }
+    }
+
+    function doRun() {
+      running = true;
+      $('btn-run').disabled = true;
+      $('btn-pause').disabled = false;
+      setStatus('running', 'running');
+      tick();
+    }
+
+    function tick() {
+      if (!running) return;
+      const s = emu.run(5000); // 5000 instructions per frame
+      updateUI();
+      if (s === 0) { animId = requestAnimationFrame(tick); }
+      else {
+        running = false;
+        setStatus('halted', s === 1 ? 'halted' : 'unimpl');
+        enableButtons(false);
+      }
+    }
+
+    function doPause() {
+      running = false;
+      if (animId) { cancelAnimationFrame(animId); animId = null; }
+      $('btn-run').disabled = false;
+      $('btn-pause').disabled = true;
+      setStatus('ready', 'paused');
+    }
+
+    function doReset() {
+      running = false;
+      if (animId) { cancelAnimationFrame(animId); animId = null; }
+      emu.init();
+      prevRegs = new Uint16Array(14);
+      enableButtons(false);
+      setStatus('idle', 'idle');
+      $('filename').textContent = 'No file loaded';
+      $('output').textContent = '';
+      $('file-input').value = '';
+      updateUI();
+    }
+
+    function updateUI() {
+      updateRegisters();
+      updateFlags();
+      updateMemory();
+      updateOutput();
+    }
+
+    function updateRegisters() {
+      const ptr = emu.get_registers();
+      const regs = new Uint16Array(emu.memory.buffer, ptr, 14);
+      for (let i = 0; i < 14; i++) {
+        const el = $('r-' + regIds[i]);
+        el.textContent = hex16(regs[i]);
+        const cell = el.closest('reg-cell');
+        if (regs[i] !== prevRegs[i]) cell.setAttribute('data-changed', '');
+        else cell.removeAttribute('data-changed');
+      }
+      prevRegs = new Uint16Array(regs);
+    }
+
+    function updateFlags() {
+      const ptr = emu.get_registers();
+      const flags = new Uint16Array(emu.memory.buffer, ptr, 14)[13];
+      for (const [name, bit] of Object.entries(flagBits)) {
+        const el = document.querySelector(`flag-bit[data-flag="${name}"]`);
+        if (flags & (1 << bit)) el.setAttribute('data-set', '');
+        else el.removeAttribute('data-set');
+      }
+    }
+
+    function updateMemory() {
+      const input = $('mem-addr').value.trim();
+      const addr = parseInt(input, 16) || 0;
+      const memPtr = emu ? emu.get_memory_ptr() : 0;
+      if (!emu) return;
+      let html = '';
+      for (let row = 0; row < 16; row++) {
+        const rowAddr = (addr + row * 16) & 0xFFFFF;
+        html += `<span class="addr">${rowAddr.toString(16).toUpperCase().padStart(5, '0')}</span>  `;
+        let ascii = '';
+        for (let col = 0; col < 16; col++) {
+          const a = (rowAddr + col) & 0xFFFFF;
+          const b = mem[memPtr + a];
+          html += hex8(b) + (col === 7 ? '  ' : ' ');
+          ascii += (b >= 0x20 && b <= 0x7E) ? String.fromCharCode(b) : '.';
+        }
+        html += ` <span class="ascii">${ascii}</span>\n`;
+      }
+      $('mem-hex').innerHTML = html;
+    }
+
+    function updateOutput() {
+      if (!emu) return;
+      const len = emu.get_output_len();
+      if (len === 0) { $('output').textContent = ''; return; }
+      const ptr = emu.get_output_buf();
+      const bytes = mem.slice(ptr, ptr + len);
+      $('output').textContent = new TextDecoder().decode(bytes);
+    }
+
+    function setStatus(state, label) {
+      const el = $('status');
+      el.dataset.state = state;
+      el.querySelector('.label').textContent = label;
+    }
+
+    function enableButtons(loaded) {
+      $('btn-step').disabled = !loaded;
+      $('btn-run').disabled = !loaded;
+      $('btn-pause').disabled = true;
+      $('btn-reset').disabled = !loaded;
+    }
+
+    boot();
+  </script>
+</body>
+</html>
