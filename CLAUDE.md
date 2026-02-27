@@ -29,8 +29,9 @@ Tests parse ~700MB of JSON and run hundreds of thousands of individual test case
 | `src/flags.zig` | Flag computation: comptime parity LUT, add/sub/inc/dec/logic flag helpers |
 | `src/test_runner.zig` | JSON parser for SingleStepTests format, state loader, delta-merge comparator |
 | `src/main.zig` | Native CLI entry point |
-| `src/wasm_api.zig` | WASM export layer: 8 exported functions, owns static Cpu and Bus instances |
-| `web/index.html` | Browser frontend. CSS handles all UI interaction (tabs, theming). ~120 lines of JS for WASM bridge only. |
+| `src/wasm_api.zig` | WASM export layer: exported functions, owns static Cpu and Bus instances |
+| `web/index.html` | Browser frontend. CSS handles all UI interaction (tabs, theming). JS for WASM bridge, CP437 text display renderer, keyboard input. |
+| `web/cp437.js` | CP437 8x16 bitmap font data (256 glyphs, 16 bytes each) for text-mode display |
 | `web/serve.py` | Dev server with `application/wasm` MIME type (`uv run web/serve.py`) |
 | `web/*.com` | Test .COM binaries (hello, fibonacci, count) |
 
@@ -56,8 +57,11 @@ Tests parse ~700MB of JSON and run hundreds of thousands of individual test case
 - Bus uses static arrays instead of `page_allocator` on WASM.
 - INT 21h (AH=02, 09, 4C) and INT 20h are intercepted in WASM builds for .COM
   program support. Native builds go through the IVT for hardware accuracy.
-- WASM exports: `init`, `step`, `run`, `load_program`, `get_registers`,
-  `get_memory_ptr`, `get_output_buf`, `get_output_len`.
+- INT 10h (video BIOS) and INT 16h (keyboard BIOS) are intercepted on WASM for
+  text-mode game support. Handles set mode, cursor, scroll, read/write char, teletype.
+- WASM exports: `init`, `step`, `run`, `load_program`, `load_boot_sector`,
+  `get_registers`, `get_memory_ptr`, `get_output_buf`, `get_output_len`,
+  `push_key`, `get_video_mode`, `is_waiting_for_key`, `get_cursor_pos`.
 - JS reads WASM linear memory directly via `Uint8Array` views at pointer offsets.
 
 ## Web frontend
@@ -67,7 +71,12 @@ Tests parse ~700MB of JSON and run hundreds of thousands of individual test case
   `light-dark()`, entry animations via `@starting-style`.
 - Custom HTML elements (`<emu-shell>`, `<reg-cell>`, `<flag-bit>`, etc.) for
   semantic markup.
-- JS is limited to: WASM loading, DOM text updates, requestAnimationFrame loop.
+- Display tab renders 80x25 text mode via canvas: reads VRAM at 0xB8000,
+  draws CP437 glyphs with CGA 16-color palette, runs every frame.
+- Keyboard events mapped to 8086 scan codes, pushed to emulator via `push_key`.
+- Load mode selector: .COM (loads at 0100h) or Boot Sector (loads at 7C00h).
+- JS is limited to: WASM loading, DOM text updates, display rendering,
+  keyboard bridge, requestAnimationFrame loop.
 
 ## Test infrastructure
 
