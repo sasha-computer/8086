@@ -329,3 +329,113 @@ test "compare state - mismatch" {
     try std.testing.expect(result != null);
     try std.testing.expect(std.mem.indexOf(u8, result.?, "AX") != null);
 }
+
+
+const execute = @import("execute.zig");
+
+/// Run all tests from a JSON file and return (passed, failed, skipped).
+pub fn runTestFile(allocator: std.mem.Allocator, path: []const u8) !struct { passed: usize, failed: usize, skipped: usize, first_failure: ?[]const u8 } {
+    const data = try std.fs.cwd().readFileAlloc(allocator, path, 50 * 1024 * 1024);
+    defer allocator.free(data);
+
+    const tests = try parseTestFile(allocator, data);
+    defer {
+        for (tests) |t| {
+            allocator.free(t.name);
+            allocator.free(t.bytes);
+            if (t.initial.ram.len > 0) allocator.free(t.initial.ram);
+            if (t.final.ram.len > 0) allocator.free(t.final.ram);
+        }
+        allocator.free(tests);
+    }
+
+    var passed: usize = 0;
+    var failed: usize = 0;
+    var skipped: usize = 0;
+    var first_failure: ?[]const u8 = null;
+
+    for (tests) |tc| {
+        var cpu = Cpu.init();
+        var bus = Bus.init();
+        defer bus.deinit();
+
+        loadState(&cpu, &bus, &tc.initial);
+
+        const exec_result = execute.step(&cpu, &bus);
+        if (exec_result == .unimplemented) {
+            skipped += 1;
+            continue;
+        }
+
+        var buf: [2048]u8 = undefined;
+        const mismatch = compareState(&cpu, &bus, &tc.final, &buf);
+        if (mismatch) |msg| {
+            failed += 1;
+            if (first_failure == null) {
+                first_failure = try allocator.dupe(u8, msg);
+            }
+        } else {
+            passed += 1;
+        }
+    }
+
+    return .{ .passed = passed, .failed = failed, .skipped = skipped, .first_failure = first_failure };
+}
+
+test "hardware validation: NOP (90)" {
+    const result = try runTestFile(std.testing.allocator, "tests/90.json");
+    if (result.first_failure) |f| std.testing.allocator.free(f);
+    try std.testing.expectEqual(@as(usize, 0), result.failed);
+    try std.testing.expectEqual(@as(usize, 0), result.skipped);
+    try std.testing.expect(result.passed == 2000);
+}
+
+test "hardware validation: ADD r/m8, r8 (00)" {
+    const result = try runTestFile(std.testing.allocator, "tests/00.json");
+    if (result.first_failure) |f| {
+        std.debug.print("\nFirst ADD 00 failure: {s}\n", .{f});
+        std.testing.allocator.free(f);
+    }
+    try std.testing.expectEqual(@as(usize, 0), result.failed);
+    try std.testing.expect(result.passed > 0);
+}
+
+test "hardware validation: ADD r/m16, r16 (01)" {
+    const result = try runTestFile(std.testing.allocator, "tests/01.json");
+    if (result.first_failure) |f| {
+        std.debug.print("\nFirst ADD 01 failure: {s}\n", .{f});
+        std.testing.allocator.free(f);
+    }
+    try std.testing.expectEqual(@as(usize, 0), result.failed);
+    try std.testing.expect(result.passed > 0);
+}
+
+test "hardware validation: ADD r8, r/m8 (02)" {
+    const result = try runTestFile(std.testing.allocator, "tests/02.json");
+    if (result.first_failure) |f| {
+        std.debug.print("\nFirst ADD 02 failure: {s}\n", .{f});
+        std.testing.allocator.free(f);
+    }
+    try std.testing.expectEqual(@as(usize, 0), result.failed);
+    try std.testing.expect(result.passed > 0);
+}
+
+test "hardware validation: ADD AL, imm8 (04)" {
+    const result = try runTestFile(std.testing.allocator, "tests/04.json");
+    if (result.first_failure) |f| {
+        std.debug.print("\nFirst ADD 04 failure: {s}\n", .{f});
+        std.testing.allocator.free(f);
+    }
+    try std.testing.expectEqual(@as(usize, 0), result.failed);
+    try std.testing.expect(result.passed > 0);
+}
+
+test "hardware validation: ADD AX, imm16 (05)" {
+    const result = try runTestFile(std.testing.allocator, "tests/05.json");
+    if (result.first_failure) |f| {
+        std.debug.print("\nFirst ADD 05 failure: {s}\n", .{f});
+        std.testing.allocator.free(f);
+    }
+    try std.testing.expectEqual(@as(usize, 0), result.failed);
+    try std.testing.expect(result.passed > 0);
+}

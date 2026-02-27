@@ -18,4 +18,6 @@ test {
     _ = @import("bus.zig");
     _ = @import("decode.zig");
     _ = @import("test_runner.zig");
+    _ = @import("flags.zig");
+    _ = @import("execute.zig");
 }
