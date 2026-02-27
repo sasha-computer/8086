@@ -431,7 +431,7 @@
     const hex16 = v => v.toString(16).toUpperCase().padStart(4, '0');
     const hex8 = v => v.toString(16).toUpperCase().padStart(2, '0');
 
-    let emu, mem, running = false, animId = null;
+    let emu, mem, running = false, animId = null, lastProgram = null;
     const regIds = ['ax','bx','cx','dx','si','di','bp','sp','cs','ds','ss','es','ip','flags'];
     const flagBits = {CF:0, PF:2, AF:4, ZF:6, SF:7, TF:8, IF:9, DF:10, OF:11};
     let prevRegs = new Uint16Array(14);
@@ -467,15 +467,19 @@
       const file = e.target.files[0];
       if (!file) return;
       const bytes = new Uint8Array(await file.arrayBuffer());
-      emu.init();
-      // Write .COM binary at physical address 0x100
-      const base = emu.get_memory_ptr() + 0x100;
-      mem.set(bytes, base);
-      emu.load_program(0x100, bytes.length);
+      lastProgram = { bytes, name: file.name };
+      loadProgram(bytes);
       $('filename').textContent = file.name;
       enableButtons(true);
       setStatus('ready', 'ready');
       updateUI();
+    }
+
+    function loadProgram(bytes) {
+      emu.init();
+      const base = emu.get_memory_ptr() + 0x100;
+      mem.set(bytes, base);
+      emu.load_program(0x100, bytes.length);
     }
 
     function doStep() {
@@ -516,14 +520,14 @@
     function doReset() {
       running = false;
       if (animId) { cancelAnimationFrame(animId); animId = null; }
-      emu.init();
-      prevRegs = new Uint16Array(14);
-      enableButtons(false);
-      setStatus('idle', 'idle');
-      $('filename').textContent = 'No file loaded';
-      $('output').textContent = '';
-      $('file-input').value = '';
-      updateUI();
+      if (lastProgram) {
+        loadProgram(lastProgram.bytes);
+        prevRegs = new Uint16Array(14);
+        enableButtons(true);
+        setStatus('ready', 'ready');
+        $('output').textContent = '';
+        updateUI();
+      }
     }
 
     function updateUI() {
