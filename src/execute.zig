@@ -306,6 +306,48 @@ fn getHandler(opcode: u8) OpHandler {
         // FF group: INC/DEC/CALL/JMP/PUSH r/m16
         0xFF => &opGrpFF,
 
+        // --- Shifts/Rotates (D0-D3) ---
+        0xD0 => &opGrpShift(.byte, .one),  // shift/rotate r/m8, 1
+        0xD1 => &opGrpShift(.word, .one),  // shift/rotate r/m16, 1
+        0xD2 => &opGrpShift(.byte, .cl),   // shift/rotate r/m8, CL
+        0xD3 => &opGrpShift(.word, .cl),   // shift/rotate r/m16, CL
+
+        // --- BCD ---
+        0x27 => &opDaa,  // DAA
+        0x2F => &opDas,  // DAS
+        0x37 => &opAaa,  // AAA
+        0x3F => &opAas,  // AAS
+        0xD4 => &opAam,  // AAM
+        0xD5 => &opAad,  // AAD
+
+        // --- String operations ---
+        0xA4 => &opMovsb,
+        0xA5 => &opMovsw,
+        0xA6 => &opCmpsb,
+        0xA7 => &opCmpsw,
+        0xAA => &opStosb,
+        0xAB => &opStosw,
+        0xAC => &opLodsb,
+        0xAD => &opLodsw,
+        0xAE => &opScasb,
+        0xAF => &opScasw,
+
+        // --- I/O ---
+        0xE4 => &opInAlImm,
+        0xE5 => &opInAxImm,
+        0xE6 => &opOutImmAl,
+        0xE7 => &opOutImmAx,
+        0xEC => &opInAlDx,
+        0xED => &opInAxDx,
+        0xEE => &opOutDxAl,
+        0xEF => &opOutDxAx,
+
+        // WAIT (no-op for emulation)
+        0x9B => &opNop,
+
+        // ESC (FPU escape, D8-DF -- consume ModR/M and ignore)
+        0xD8...0xDF => &opEsc,
+
         else => &opUnimplemented,
     };
 }
@@ -773,6 +815,62 @@ fn opGrpF6(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
             const result = flags_mod.sub8(&cpu.flags, 0, val, 0);
             writeEA(cpu, bus, ea, .byte, result);
         },
+        4 => { // MUL r/m8
+            const result: u16 = @as(u16, cpu.ax.parts.lo) * @as(u16, val);
+            cpu.ax.word = result;
+            const hi_nonzero = cpu.ax.parts.hi != 0;
+            cpu.flags.carry = hi_nonzero;
+            cpu.flags.overflow = hi_nonzero;
+            // SF, ZF, AF, PF are undefined on 8086 but hardware sets them
+            flags_mod.setSzp8(&cpu.flags, cpu.ax.parts.lo);
+            cpu.flags.sign = (cpu.ax.parts.hi & 0x80) != 0;
+            cpu.flags.aux_carry = false;
+        },
+        5 => { // IMUL r/m8
+            const result: i16 = @as(i16, @as(i8, @bitCast(cpu.ax.parts.lo))) * @as(i16, @as(i8, @bitCast(val)));
+            cpu.ax.word = @bitCast(result);
+            // CF=OF=1 if sign extension of AL != AX
+            const sign_ext: i16 = @as(i8, @bitCast(cpu.ax.parts.lo));
+            const ext_differs = @as(u16, @bitCast(sign_ext)) != cpu.ax.word;
+            cpu.flags.carry = ext_differs;
+            cpu.flags.overflow = ext_differs;
+            flags_mod.setSzp8(&cpu.flags, cpu.ax.parts.lo);
+            cpu.flags.sign = (cpu.ax.parts.hi & 0x80) != 0;
+            cpu.flags.aux_carry = false;
+        },
+        6 => { // DIV r/m8
+            if (val == 0) {
+                doInterrupt(cpu, bus, 0);
+                return .ok;
+            }
+            const dividend = cpu.ax.word;
+            const quotient = dividend / @as(u16, val);
+            if (quotient > 0xFF) {
+                doInterrupt(cpu, bus, 0);
+                return .ok;
+            }
+            cpu.ax.parts.lo = @truncate(quotient);
+            cpu.ax.parts.hi = @truncate(dividend % @as(u16, val));
+        },
+        7 => { // IDIV r/m8
+            if (val == 0) {
+                doInterrupt(cpu, bus, 0);
+                return .ok;
+            }
+            const dividend: i16 = @bitCast(cpu.ax.word);
+            const divisor: i16 = @as(i8, @bitCast(val));
+            if (divisor == 0) {
+                doInterrupt(cpu, bus, 0);
+                return .ok;
+            }
+            const quotient = @divTrunc(dividend, divisor);
+            if (quotient > 127 or quotient < -128) {
+                doInterrupt(cpu, bus, 0);
+                return .ok;
+            }
+            cpu.ax.parts.lo = @bitCast(@as(i8, @truncate(quotient)));
+            cpu.ax.parts.hi = @bitCast(@as(i8, @truncate(@rem(dividend, divisor))));
+        },
         else => return .unimplemented,
     }
     return .ok;
@@ -796,6 +894,63 @@ fn opGrpF7(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
         3 => { // NEG r/m16
             const result = flags_mod.sub16(&cpu.flags, 0, val, 0);
             writeEA(cpu, bus, ea, .word, result);
+        },
+        4 => { // MUL r/m16
+            const result: u32 = @as(u32, cpu.ax.word) * @as(u32, val);
+            cpu.ax.word = @truncate(result);
+            cpu.dx.word = @truncate(result >> 16);
+            const hi_nonzero = cpu.dx.word != 0;
+            cpu.flags.carry = hi_nonzero;
+            cpu.flags.overflow = hi_nonzero;
+            flags_mod.setSzp16(&cpu.flags, cpu.ax.word);
+            cpu.flags.sign = (cpu.dx.word & 0x8000) != 0;
+            cpu.flags.aux_carry = false;
+        },
+        5 => { // IMUL r/m16
+            const result: i32 = @as(i32, @as(i16, @bitCast(cpu.ax.word))) * @as(i32, @as(i16, @bitCast(val)));
+            const uresult: u32 = @bitCast(result);
+            cpu.ax.word = @truncate(uresult);
+            cpu.dx.word = @truncate(uresult >> 16);
+            const sign_ext: i32 = @as(i16, @bitCast(cpu.ax.word));
+            const ext_differs = @as(u32, @bitCast(sign_ext)) != uresult;
+            cpu.flags.carry = ext_differs;
+            cpu.flags.overflow = ext_differs;
+            flags_mod.setSzp16(&cpu.flags, cpu.ax.word);
+            cpu.flags.sign = (cpu.dx.word & 0x8000) != 0;
+            cpu.flags.aux_carry = false;
+        },
+        6 => { // DIV r/m16
+            if (val == 0) {
+                doInterrupt(cpu, bus, 0);
+                return .ok;
+            }
+            const dividend: u32 = @as(u32, cpu.dx.word) << 16 | @as(u32, cpu.ax.word);
+            const quotient = dividend / @as(u32, val);
+            if (quotient > 0xFFFF) {
+                doInterrupt(cpu, bus, 0);
+                return .ok;
+            }
+            cpu.ax.word = @truncate(quotient);
+            cpu.dx.word = @truncate(dividend % @as(u32, val));
+        },
+        7 => { // IDIV r/m16
+            if (val == 0) {
+                doInterrupt(cpu, bus, 0);
+                return .ok;
+            }
+            const dividend: i32 = (@as(i32, @as(i16, @bitCast(cpu.dx.word))) << 16) | @as(i32, @intCast(cpu.ax.word));
+            const divisor: i32 = @as(i16, @bitCast(val));
+            if (divisor == 0) {
+                doInterrupt(cpu, bus, 0);
+                return .ok;
+            }
+            const quotient = @divTrunc(dividend, divisor);
+            if (quotient > 32767 or quotient < -32768) {
+                doInterrupt(cpu, bus, 0);
+                return .ok;
+            }
+            cpu.ax.word = @bitCast(@as(i16, @truncate(quotient)));
+            cpu.dx.word = @bitCast(@as(i16, @truncate(@rem(dividend, divisor))));
         },
         else => return .unimplemented,
     }
@@ -1247,6 +1402,553 @@ fn opXlat(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
     const seg = prefix.seg_override orelse cpu.ds;
     const offset = cpu.bx.word +% @as(u16, cpu.ax.parts.lo);
     cpu.ax.parts.lo = bus.read8(seg, offset);
+    return .ok;
+}
+
+// --- Shifts and Rotates (Phase 6) ---
+
+const ShiftCount = enum { one, cl };
+
+fn opGrpShift(comptime size: OpSize, comptime count_src: ShiftCount) fn (*Cpu, *Bus, u8, *const PrefixState) ExecResult {
+    return struct {
+        fn handler(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+            const modrm_byte = Decoder.fetchByte(cpu, bus);
+            const modrm = Decoder.decodeModRM(modrm_byte);
+            const ea = Decoder.resolveModRM(cpu, bus, modrm, prefix.seg_override);
+            var val: u16 = readEA(cpu, bus, ea, size);
+
+            const count: u8 = switch (count_src) {
+                .one => 1,
+                .cl => cpu.cx.parts.lo,
+            };
+
+            var i: u8 = 0;
+            while (i < count) : (i += 1) {
+                val = doShiftOne(cpu, modrm.reg, val, size);
+            }
+
+            // Overflow flag is only defined for single-bit shifts
+            if (count == 1) {
+                switch (modrm.reg) {
+                    0 => { // ROL
+                        cpu.flags.overflow = switch (size) {
+                            .byte => (val & 0x80 != 0) != cpu.flags.carry,
+                            .word => (val & 0x8000 != 0) != cpu.flags.carry,
+                        };
+                    },
+                    1 => { // ROR
+                        switch (size) {
+                            .byte => cpu.flags.overflow = ((val >> 7) & 1) != ((val >> 6) & 1),
+                            .word => cpu.flags.overflow = ((val >> 15) & 1) != ((val >> 14) & 1),
+                        }
+                    },
+                    2 => { // RCL
+                        cpu.flags.overflow = switch (size) {
+                            .byte => (val & 0x80 != 0) != cpu.flags.carry,
+                            .word => (val & 0x8000 != 0) != cpu.flags.carry,
+                        };
+                    },
+                    3 => { // RCR
+                        switch (size) {
+                            .byte => cpu.flags.overflow = ((val >> 7) & 1) != ((val >> 6) & 1),
+                            .word => cpu.flags.overflow = ((val >> 15) & 1) != ((val >> 14) & 1),
+                        }
+                    },
+                    4, 6 => { // SHL/SAL
+                        cpu.flags.overflow = switch (size) {
+                            .byte => (val & 0x80 != 0) != cpu.flags.carry,
+                            .word => (val & 0x8000 != 0) != cpu.flags.carry,
+                        };
+                    },
+                    5 => { // SHR
+                        switch (size) {
+                            .byte => cpu.flags.overflow = (val & 0x80) != 0,
+                            .word => cpu.flags.overflow = (val & 0x8000) != 0,
+                        }
+                        // For SHR by 1, OF = MSB of original value
+                        // But we already shifted, so check bit below MSB... actually
+                        // OF is set to MSB of the original operand
+                        // We need the pre-shift value, but we computed post-shift.
+                        // For count=1: original MSB = (result << 1 | CF) MSB
+                        // Simpler: OF = result MSB XOR (result bit below MSB) is wrong.
+                        // Actually for SHR by 1: OF = MSB of original = carry_out of shift into MSB
+                        // Since we shift right: OF = bit that was in MSB = (result's MSB-1 bit? No)
+                        // On 8086: SHR by 1 sets OF = high bit of original operand
+                        // post-shift MSB is always 0, so OF = CF for the second-to-last... no.
+                        // SHR: OF = MSB of original. After shift right by 1:
+                        // result = original >> 1, CF = original bit 0
+                        // original MSB = result's (MSB-1) bit shifted up... no, result bit (n-1) = original bit n
+                        // So original MSB = ... it's gone if 0. Actually:
+                        // For byte: original bit 7 = 0 if result bit 7 is 0 AND result bit 6 is 0
+                        // Wait: result = original >> 1. So result[6] = original[7].
+                        // OF = original[7] = result[6]
+                        cpu.flags.overflow = switch (size) {
+                            .byte => (val >> 6) & 1 != 0,
+                            .word => (val >> 14) & 1 != 0,
+                        };
+                    },
+                    7 => { // SAR
+                        cpu.flags.overflow = false; // always 0 for SAR by 1
+                    },
+                }
+            }
+
+            if (count > 0) {
+                writeEA(cpu, bus, ea, size, val);
+            }
+
+            return .ok;
+        }
+    }.handler;
+}
+
+/// Perform one shift/rotate operation, updating CF and (for shifts) SZP flags.
+fn doShiftOne(cpu: *Cpu, op: u3, val: u16, comptime size: OpSize) u16 {
+    return switch (op) {
+        0 => blk: { // ROL
+            const top_bit: u1 = switch (size) {
+                .byte => @truncate((val >> 7) & 1),
+                .word => @truncate((val >> 15) & 1),
+            };
+            const r = switch (size) {
+                .byte => (@as(u16, @as(u8, @truncate(val))) << 1) | top_bit,
+                .word => (val << 1) | top_bit,
+            };
+            cpu.flags.carry = top_bit != 0;
+            break :blk r;
+        },
+        1 => blk: { // ROR
+            const bottom_bit: u1 = @truncate(val & 1);
+            const r = switch (size) {
+                .byte => (@as(u16, bottom_bit) << 7) | (@as(u8, @truncate(val)) >> 1),
+                .word => (@as(u16, bottom_bit) << 15) | (val >> 1),
+            };
+            cpu.flags.carry = bottom_bit != 0;
+            break :blk r;
+        },
+        2 => blk: { // RCL
+            const old_cf: u1 = if (cpu.flags.carry) 1 else 0;
+            const top_bit = switch (size) {
+                .byte => (val >> 7) & 1,
+                .word => (val >> 15) & 1,
+            };
+            cpu.flags.carry = top_bit != 0;
+            const r = switch (size) {
+                .byte => (@as(u16, @as(u8, @truncate(val))) << 1) | old_cf,
+                .word => (val << 1) | old_cf,
+            };
+            break :blk r;
+        },
+        3 => blk: { // RCR
+            const old_cf: u1 = if (cpu.flags.carry) 1 else 0;
+            const bottom_bit: u1 = @truncate(val & 1);
+            cpu.flags.carry = bottom_bit != 0;
+            const r = switch (size) {
+                .byte => (@as(u16, old_cf) << 7) | (@as(u8, @truncate(val)) >> 1),
+                .word => (@as(u16, old_cf) << 15) | (val >> 1),
+            };
+            break :blk r;
+        },
+        4, 6 => blk: { // SHL/SAL
+            const top_bit = switch (size) {
+                .byte => (val >> 7) & 1,
+                .word => (val >> 15) & 1,
+            };
+            cpu.flags.carry = top_bit != 0;
+            const r = switch (size) {
+                .byte => @as(u16, @as(u8, @truncate(val))) << 1,
+                .word => val << 1,
+            };
+            switch (size) {
+                .byte => flags_mod.setSzp8(&cpu.flags, @truncate(r)),
+                .word => flags_mod.setSzp16(&cpu.flags, r),
+            }
+            cpu.flags.aux_carry = false; // undefined, clear for consistency
+            break :blk r;
+        },
+        5 => blk: { // SHR
+            const bottom_bit: u1 = @truncate(val & 1);
+            cpu.flags.carry = bottom_bit != 0;
+            const r = switch (size) {
+                .byte => @as(u16, @as(u8, @truncate(val)) >> 1),
+                .word => val >> 1,
+            };
+            switch (size) {
+                .byte => flags_mod.setSzp8(&cpu.flags, @truncate(r)),
+                .word => flags_mod.setSzp16(&cpu.flags, r),
+            }
+            cpu.flags.aux_carry = false;
+            break :blk r;
+        },
+        7 => blk: { // SAR
+            const bottom_bit: u1 = @truncate(val & 1);
+            cpu.flags.carry = bottom_bit != 0;
+            const r: u16 = switch (size) {
+                .byte => @bitCast(@as(i16, @as(i8, @bitCast(@as(u8, @truncate(val)))) >> 1)),
+                .word => @bitCast(@as(i16, @bitCast(val)) >> 1),
+            };
+            switch (size) {
+                .byte => flags_mod.setSzp8(&cpu.flags, @truncate(r)),
+                .word => flags_mod.setSzp16(&cpu.flags, r),
+            }
+            cpu.flags.aux_carry = false;
+            break :blk r;
+        },
+    };
+}
+
+// --- BCD Instructions ---
+
+fn opDaa(cpu: *Cpu, _: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const old_al = cpu.ax.parts.lo;
+    const old_cf = cpu.flags.carry;
+
+    if ((cpu.ax.parts.lo & 0x0F) > 9 or cpu.flags.aux_carry) {
+        cpu.ax.parts.lo +%= 6;
+        cpu.flags.aux_carry = true;
+    } else {
+        cpu.flags.aux_carry = false;
+    }
+
+    if (old_al > 0x99 or old_cf) {
+        cpu.ax.parts.lo +%= 0x60;
+        cpu.flags.carry = true;
+    } else {
+        cpu.flags.carry = false;
+    }
+
+    flags_mod.setSzp8(&cpu.flags, cpu.ax.parts.lo);
+    return .ok;
+}
+
+fn opDas(cpu: *Cpu, _: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const old_al = cpu.ax.parts.lo;
+    const old_cf = cpu.flags.carry;
+
+    if ((cpu.ax.parts.lo & 0x0F) > 9 or cpu.flags.aux_carry) {
+        cpu.ax.parts.lo -%= 6;
+        cpu.flags.aux_carry = true;
+    } else {
+        cpu.flags.aux_carry = false;
+    }
+
+    if (old_al > 0x99 or old_cf) {
+        cpu.ax.parts.lo -%= 0x60;
+        cpu.flags.carry = true;
+    } else {
+        cpu.flags.carry = false;
+    }
+
+    flags_mod.setSzp8(&cpu.flags, cpu.ax.parts.lo);
+    return .ok;
+}
+
+fn opAaa(cpu: *Cpu, _: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    if ((cpu.ax.parts.lo & 0x0F) > 9 or cpu.flags.aux_carry) {
+        cpu.ax.parts.lo +%= 6;
+        cpu.ax.parts.hi +%= 1;
+        cpu.flags.aux_carry = true;
+        cpu.flags.carry = true;
+    } else {
+        cpu.flags.aux_carry = false;
+        cpu.flags.carry = false;
+    }
+    cpu.ax.parts.lo &= 0x0F;
+    flags_mod.setSzp8(&cpu.flags, cpu.ax.parts.lo);
+    return .ok;
+}
+
+fn opAas(cpu: *Cpu, _: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    if ((cpu.ax.parts.lo & 0x0F) > 9 or cpu.flags.aux_carry) {
+        cpu.ax.parts.lo -%= 6;
+        cpu.ax.parts.hi -%= 1;
+        cpu.flags.aux_carry = true;
+        cpu.flags.carry = true;
+    } else {
+        cpu.flags.aux_carry = false;
+        cpu.flags.carry = false;
+    }
+    cpu.ax.parts.lo &= 0x0F;
+    flags_mod.setSzp8(&cpu.flags, cpu.ax.parts.lo);
+    return .ok;
+}
+
+fn opAam(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const base = Decoder.fetchByte(cpu, bus);
+    if (base == 0) {
+        doInterrupt(cpu, bus, 0);
+        return .ok;
+    }
+    const al = cpu.ax.parts.lo;
+    cpu.ax.parts.hi = al / base;
+    cpu.ax.parts.lo = al % base;
+    flags_mod.setSzp8(&cpu.flags, cpu.ax.parts.lo);
+    cpu.flags.carry = false;
+    cpu.flags.overflow = false;
+    cpu.flags.aux_carry = false;
+    return .ok;
+}
+
+fn opAad(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const base = Decoder.fetchByte(cpu, bus);
+    const al = cpu.ax.parts.lo;
+    const product: u8 = cpu.ax.parts.hi *% base;
+    // AAD performs an 8-bit add (AL + AH*base) with full flag effects
+    cpu.ax.parts.lo = flags_mod.add8(&cpu.flags, al, product, 0);
+    cpu.ax.parts.hi = 0;
+    return .ok;
+}
+
+// --- String Operations ---
+
+fn stringSegSrc(cpu: *const Cpu, prefix: *const PrefixState) u16 {
+    return prefix.seg_override orelse cpu.ds;
+}
+
+fn advanceSI(cpu: *Cpu, comptime size: OpSize) void {
+    if (cpu.flags.direction) {
+        cpu.si -%= switch (size) { .byte => 1, .word => 2 };
+    } else {
+        cpu.si +%= switch (size) { .byte => 1, .word => 2 };
+    }
+}
+
+fn advanceDI(cpu: *Cpu, comptime size: OpSize) void {
+    if (cpu.flags.direction) {
+        cpu.di -%= switch (size) { .byte => 1, .word => 2 };
+    } else {
+        cpu.di +%= switch (size) { .byte => 1, .word => 2 };
+    }
+}
+
+fn opMovsb(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+    if (prefix.rep_prefix != .none) {
+        while (cpu.cx.word != 0) {
+            const val = bus.read8(stringSegSrc(cpu, prefix), cpu.si);
+            bus.write8(cpu.es, cpu.di, val);
+            advanceSI(cpu, .byte);
+            advanceDI(cpu, .byte);
+            cpu.cx.word -%= 1;
+        }
+    } else {
+        const val = bus.read8(stringSegSrc(cpu, prefix), cpu.si);
+        bus.write8(cpu.es, cpu.di, val);
+        advanceSI(cpu, .byte);
+        advanceDI(cpu, .byte);
+    }
+    return .ok;
+}
+
+fn opMovsw(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+    if (prefix.rep_prefix != .none) {
+        while (cpu.cx.word != 0) {
+            const val = bus.read16(stringSegSrc(cpu, prefix), cpu.si);
+            bus.write16(cpu.es, cpu.di, val);
+            advanceSI(cpu, .word);
+            advanceDI(cpu, .word);
+            cpu.cx.word -%= 1;
+        }
+    } else {
+        const val = bus.read16(stringSegSrc(cpu, prefix), cpu.si);
+        bus.write16(cpu.es, cpu.di, val);
+        advanceSI(cpu, .word);
+        advanceDI(cpu, .word);
+    }
+    return .ok;
+}
+
+fn opCmpsb(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+    if (prefix.rep_prefix == .rep or prefix.rep_prefix == .repnz) {
+        while (cpu.cx.word != 0) {
+            const a = bus.read8(stringSegSrc(cpu, prefix), cpu.si);
+            const b = bus.read8(cpu.es, cpu.di);
+            _ = flags_mod.sub8(&cpu.flags, a, b, 0);
+            advanceSI(cpu, .byte);
+            advanceDI(cpu, .byte);
+            cpu.cx.word -%= 1;
+            if (prefix.rep_prefix == .rep and !cpu.flags.zero) break;
+            if (prefix.rep_prefix == .repnz and cpu.flags.zero) break;
+        }
+    } else {
+        const a = bus.read8(stringSegSrc(cpu, prefix), cpu.si);
+        const b = bus.read8(cpu.es, cpu.di);
+        _ = flags_mod.sub8(&cpu.flags, a, b, 0);
+        advanceSI(cpu, .byte);
+        advanceDI(cpu, .byte);
+    }
+    return .ok;
+}
+
+fn opCmpsw(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+    if (prefix.rep_prefix == .rep or prefix.rep_prefix == .repnz) {
+        while (cpu.cx.word != 0) {
+            const a = bus.read16(stringSegSrc(cpu, prefix), cpu.si);
+            const b = bus.read16(cpu.es, cpu.di);
+            _ = flags_mod.sub16(&cpu.flags, a, b, 0);
+            advanceSI(cpu, .word);
+            advanceDI(cpu, .word);
+            cpu.cx.word -%= 1;
+            if (prefix.rep_prefix == .rep and !cpu.flags.zero) break;
+            if (prefix.rep_prefix == .repnz and cpu.flags.zero) break;
+        }
+    } else {
+        const a = bus.read16(stringSegSrc(cpu, prefix), cpu.si);
+        const b = bus.read16(cpu.es, cpu.di);
+        _ = flags_mod.sub16(&cpu.flags, a, b, 0);
+        advanceSI(cpu, .word);
+        advanceDI(cpu, .word);
+    }
+    return .ok;
+}
+
+fn opStosb(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+    if (prefix.rep_prefix != .none) {
+        while (cpu.cx.word != 0) {
+            bus.write8(cpu.es, cpu.di, cpu.ax.parts.lo);
+            advanceDI(cpu, .byte);
+            cpu.cx.word -%= 1;
+        }
+    } else {
+        bus.write8(cpu.es, cpu.di, cpu.ax.parts.lo);
+        advanceDI(cpu, .byte);
+    }
+    return .ok;
+}
+
+fn opStosw(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+    if (prefix.rep_prefix != .none) {
+        while (cpu.cx.word != 0) {
+            bus.write16(cpu.es, cpu.di, cpu.ax.word);
+            advanceDI(cpu, .word);
+            cpu.cx.word -%= 1;
+        }
+    } else {
+        bus.write16(cpu.es, cpu.di, cpu.ax.word);
+        advanceDI(cpu, .word);
+    }
+    return .ok;
+}
+
+fn opLodsb(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+    if (prefix.rep_prefix != .none) {
+        while (cpu.cx.word != 0) {
+            cpu.ax.parts.lo = bus.read8(stringSegSrc(cpu, prefix), cpu.si);
+            advanceSI(cpu, .byte);
+            cpu.cx.word -%= 1;
+        }
+    } else {
+        cpu.ax.parts.lo = bus.read8(stringSegSrc(cpu, prefix), cpu.si);
+        advanceSI(cpu, .byte);
+    }
+    return .ok;
+}
+
+fn opLodsw(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+    if (prefix.rep_prefix != .none) {
+        while (cpu.cx.word != 0) {
+            cpu.ax.word = bus.read16(stringSegSrc(cpu, prefix), cpu.si);
+            advanceSI(cpu, .word);
+            cpu.cx.word -%= 1;
+        }
+    } else {
+        cpu.ax.word = bus.read16(stringSegSrc(cpu, prefix), cpu.si);
+        advanceSI(cpu, .word);
+    }
+    return .ok;
+}
+
+fn opScasb(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+    if (prefix.rep_prefix == .rep or prefix.rep_prefix == .repnz) {
+        while (cpu.cx.word != 0) {
+            const val = bus.read8(cpu.es, cpu.di);
+            _ = flags_mod.sub8(&cpu.flags, cpu.ax.parts.lo, val, 0);
+            advanceDI(cpu, .byte);
+            cpu.cx.word -%= 1;
+            if (prefix.rep_prefix == .rep and !cpu.flags.zero) break;
+            if (prefix.rep_prefix == .repnz and cpu.flags.zero) break;
+        }
+    } else {
+        const val = bus.read8(cpu.es, cpu.di);
+        _ = flags_mod.sub8(&cpu.flags, cpu.ax.parts.lo, val, 0);
+        advanceDI(cpu, .byte);
+    }
+    return .ok;
+}
+
+fn opScasw(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+    if (prefix.rep_prefix == .rep or prefix.rep_prefix == .repnz) {
+        while (cpu.cx.word != 0) {
+            const val = bus.read16(cpu.es, cpu.di);
+            _ = flags_mod.sub16(&cpu.flags, cpu.ax.word, val, 0);
+            advanceDI(cpu, .word);
+            cpu.cx.word -%= 1;
+            if (prefix.rep_prefix == .rep and !cpu.flags.zero) break;
+            if (prefix.rep_prefix == .repnz and cpu.flags.zero) break;
+        }
+    } else {
+        const val = bus.read16(cpu.es, cpu.di);
+        _ = flags_mod.sub16(&cpu.flags, cpu.ax.word, val, 0);
+        advanceDI(cpu, .word);
+    }
+    return .ok;
+}
+
+// --- I/O ---
+
+fn opInAlImm(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const port = Decoder.fetchByte(cpu, bus);
+    cpu.ax.parts.lo = bus.inPort8(port);
+    return .ok;
+}
+
+fn opInAxImm(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const port = Decoder.fetchByte(cpu, bus);
+    cpu.ax.parts.lo = bus.inPort8(port);
+    cpu.ax.parts.hi = bus.inPort8(port +% 1);
+    return .ok;
+}
+
+fn opOutImmAl(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const port = Decoder.fetchByte(cpu, bus);
+    bus.outPort8(port, cpu.ax.parts.lo);
+    return .ok;
+}
+
+fn opOutImmAx(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    const port = Decoder.fetchByte(cpu, bus);
+    bus.outPort8(port, cpu.ax.parts.lo);
+    bus.outPort8(port +% 1, cpu.ax.parts.hi);
+    return .ok;
+}
+
+fn opInAlDx(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    cpu.ax.parts.lo = bus.inPort8(cpu.dx.word);
+    return .ok;
+}
+
+fn opInAxDx(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    cpu.ax.parts.lo = bus.inPort8(cpu.dx.word);
+    cpu.ax.parts.hi = bus.inPort8(cpu.dx.word +% 1);
+    return .ok;
+}
+
+fn opOutDxAl(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    bus.outPort8(cpu.dx.word, cpu.ax.parts.lo);
+    return .ok;
+}
+
+fn opOutDxAx(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
+    bus.outPort8(cpu.dx.word, cpu.ax.parts.lo);
+    bus.outPort8(cpu.dx.word +% 1, cpu.ax.parts.hi);
+    return .ok;
+}
+
+// ESC (FPU escape) -- consume ModR/M and ignore
+fn opEsc(cpu: *Cpu, bus: *Bus, _: u8, prefix: *const PrefixState) ExecResult {
+    const modrm_byte = Decoder.fetchByte(cpu, bus);
+    const modrm = Decoder.decodeModRM(modrm_byte);
+    // Consume any displacement bytes
+    _ = Decoder.resolveModRM(cpu, bus, modrm, prefix.seg_override);
     return .ok;
 }
 // --- Simple instructions ---
