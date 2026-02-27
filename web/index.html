@@ -481,8 +481,8 @@
     function doStep() {
       const s = emu.step();
       updateUI();
-      if (s === 1) { setStatus('halted', 'halted'); enableButtons(false); }
-      else if (s === 2) { setStatus('halted', 'unimpl'); enableButtons(false); }
+      if (s === 1) { setStatus('halted', 'halted'); enableButtons(false); $('btn-reset').disabled = false; }
+      else if (s === 2) { setStatus('halted', 'unimpl'); enableButtons(false); $('btn-reset').disabled = false; }
     }
 
     function doRun() {
@@ -501,7 +501,7 @@
       else {
         running = false;
         setStatus('halted', s === 1 ? 'halted' : 'unimpl');
-        enableButtons(false);
+        enableButtons(false); $('btn-reset').disabled = false;
       }
     }
 
