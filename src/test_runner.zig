@@ -809,3 +809,11 @@ test "hardware validation: I/O (E4-E7, EC-EF)" {
     try validateOpcode("tests/EE.json");
     try validateOpcode("tests/EF.json");
 }
+
+test "hardware validation: ESC / FPU escape (D8-DF)" {
+    for (0xD8..0xE0) |op| {
+        var path_buf: [32]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "tests/{X:0>2}.json", .{op}) catch unreachable;
+        try validateOpcode(path);
+    }
+}
