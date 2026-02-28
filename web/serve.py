@@ -14,7 +14,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     }
 
     def log_message(self, fmt, *args):
-        sys.stderr.write(f"  {args[0]}\n")
+        # Quiet down GET request spam
+        pass
+
+    def do_POST(self):
+        if self.path == '/log':
+            length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(length).decode('utf-8', errors='replace')
+            print(f'  \033[33m[js]\033[0m {body}')
+            self.send_response(204)
+            self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
 
 
 # Always serve from the directory this script lives in.

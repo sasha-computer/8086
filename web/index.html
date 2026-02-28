@@ -498,6 +498,9 @@
     const hex16 = v => v.toString(16).toUpperCase().padStart(4, '0');
     const hex8 = v => v.toString(16).toUpperCase().padStart(2, '0');
 
+    // Remote log: POST to /log so messages appear in serve.py terminal
+    function rlog(msg) { console.log('[emu]', msg); fetch('/log', { method: 'POST', body: msg }).catch(() => {}); }
+
     // ---- CGA 16-color palette ----
     const CGA = [
       '#000000','#0000AA','#00AA00','#00AAAA',
@@ -551,15 +554,21 @@
         $('mem-addr').addEventListener('input', updateMemory);
         // Keyboard input for the emulator
         document.addEventListener('keydown', onKey);
+        // Demo buttons
+        for (const btn of document.querySelectorAll('[data-demo]')) {
+          btn.addEventListener('click', () => loadDemo(btn.dataset.demo, btn.dataset.mode, btn.dataset.tab));
+        }
       } catch (err) {
         console.error('Failed to load WASM:', err);
+        rlog('boot failed: ' + err);
         setStatus('halted', 'error');
         $('filename').textContent = 'WASM load failed';
       }
     }
 
     async function loadDemo(filename, mode, tab) {
-      if (!emu) return;
+      rlog('loadDemo: ' + filename + ' mode=' + mode);
+      if (!emu) { rlog('loadDemo: emu not ready'); return; }
       running = false;
       if (animId) { cancelAnimationFrame(animId); animId = null; }
       const resp = await fetch(filename);
@@ -573,6 +582,7 @@
       enableButtons(true);
       if (tab) document.getElementById('tab-' + tab).checked = true;
       updateUI();
+      rlog('loadDemo: running ' + filename);
       doRun();
     }
 
@@ -622,8 +632,8 @@
     function doStep() {
       const s = emu.step();
       updateUI();
-      if (s === 1) { setStatus('halted', 'halted'); enableButtons(false); $('btn-reset').disabled = false; }
-      else if (s === 2) { setStatus('halted', 'unimpl'); enableButtons(false); $('btn-reset').disabled = false; }
+      if (s === 1) { rlog('step: halted'); setStatus('halted', 'halted'); enableButtons(false); $('btn-reset').disabled = false; }
+      else if (s === 2) { rlog('step: unimpl at CS:IP=' + hex16(prevRegs[8]) + ':' + hex16(prevRegs[12])); setStatus('halted', 'unimpl'); enableButtons(false); $('btn-reset').disabled = false; }
     }
 
     function doRun() {
@@ -641,7 +651,16 @@
       if (s === 0) { animId = requestAnimationFrame(tick); }
       else {
         running = false;
-        setStatus('halted', s === 1 ? 'halted' : 'unimpl');
+        const label = s === 1 ? 'halted' : 'unimpl';
+        if (s === 2) {
+          const ptr = emu.get_registers();
+          const regs = new Uint16Array(emu.memory.buffer, ptr, 14);
+          const csip = hex16(regs[8]) + ':' + hex16(regs[12]);
+          const memPtr = emu.get_memory_ptr();
+          const opcode = hex8(mem[memPtr + (regs[8] * 16 + regs[12]) & 0xFFFFF]);
+          rlog('unimpl opcode 0x' + opcode + ' at ' + csip);
+        }
+        setStatus('halted', label);
         enableButtons(false); $('btn-reset').disabled = false;
       }
     }
