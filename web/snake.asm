@@ -156,10 +156,10 @@ game_loop:
     call draw_score
 
     ; Delay loop
-    mov cx, 0x0008
+    mov cx, 0x0002
 .delay_outer:
     push cx
-    xor cx, cx              ; 0xFFFF+1 = 65536 iterations
+    mov cx, 0x0100          ; 256 iterations (fast in emulator)
 .delay_inner:
     dec cx
     jnz .delay_inner
