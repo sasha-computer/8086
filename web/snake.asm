@@ -1,4 +1,4 @@
-; snake.com - Simple text-mode snake game (pure 8086)
+; snake.com - Text-mode snake game with proper body (pure 8086)
 ; Uses INT 10h (video) and INT 16h (keyboard)
 ; Assemble: nasm -f bin -o snake.com snake.asm
 cpu 8086
@@ -7,7 +7,8 @@ org 0x100
 COLS equ 80
 ROWS equ 25
 VRAM equ 0xB800
-ROW_BYTES equ COLS*2   ; 160 bytes per row
+ROW_BYTES equ COLS*2
+MAX_LEN equ 200            ; max snake body segments
 
 section .text
 start:
@@ -27,15 +28,35 @@ start:
     ; Draw border
     call draw_border
 
-    ; Init snake at center
-    mov word [snake_x], 40
-    mov word [snake_y], 12
-    mov byte [dir], 0       ; 0=right, 1=down, 2=left, 3=up
+    ; Init snake: 3 segments going right from center
+    mov word [head], 2      ; head index into ring buffer
+    mov word [tail], 0      ; tail index
+    mov word [slen], 3      ; current length
+    mov byte [dir], 0       ; 0=right
     mov word [score], 0
+    mov byte [grow], 0      ; growth pending
 
-    ; Init tail behind head
-    mov word [tail_x], 39
-    mov word [tail_y], 12
+    ; Place initial body: positions (38,12), (39,12), (40,12)
+    mov word [body_x + 0], 38
+    mov word [body_y + 0], 12
+    mov word [body_x + 2], 39
+    mov word [body_y + 2], 12
+    mov word [body_x + 4], 40
+    mov word [body_y + 4], 12
+
+    ; Draw initial body
+    mov ax, 38
+    mov bx, 12
+    call calc_offset
+    mov word [es:di], 0x0AFE  ; body block, green
+    mov ax, 39
+    mov bx, 12
+    call calc_offset
+    mov word [es:di], 0x0AFE
+    mov ax, 40
+    mov bx, 12
+    call calc_offset
+    mov word [es:di], 0x0A02  ; head: smiley, green
 
     ; Place initial food
     call place_food
@@ -50,21 +71,20 @@ game_loop:
     mov ah, 0x00
     int 0x16
 
-    ; AH = scan code
-    cmp ah, 0x48            ; up
+    cmp ah, 0x48
     je .set_up
-    cmp ah, 0x50            ; down
+    cmp ah, 0x50
     je .set_down
-    cmp ah, 0x4B            ; left
+    cmp ah, 0x4B
     je .set_left
-    cmp ah, 0x4D            ; right
+    cmp ah, 0x4D
     je .set_right
-    cmp ah, 0x01            ; ESC
+    cmp ah, 0x01
     je quit
     jmp .no_key
 
 .set_up:
-    cmp byte [dir], 1       ; can't reverse
+    cmp byte [dir], 1
     je .no_key
     mov byte [dir], 3
     jmp .no_key
@@ -84,82 +104,127 @@ game_loop:
     mov byte [dir], 0
 
 .no_key:
-    ; Save old position as tail
-    mov ax, [snake_x]
-    mov [tail_x], ax
-    mov ax, [snake_y]
-    mov [tail_y], ax
+    ; Get current head position
+    mov si, [head]
+    shl si, 1              ; word index
+    mov ax, [body_x + si]
+    mov bx, [body_y + si]
 
-    ; Move snake head based on direction
+    ; Move based on direction
     cmp byte [dir], 0
-    je .move_right
+    je .mr
     cmp byte [dir], 1
-    je .move_down
+    je .md
     cmp byte [dir], 2
-    je .move_left
-    ; else up
-    dec word [snake_y]
+    je .ml
+    dec bx
     jmp .moved
-.move_right:
-    inc word [snake_x]
+.mr:
+    inc ax
     jmp .moved
-.move_down:
-    inc word [snake_y]
+.md:
+    inc bx
     jmp .moved
-.move_left:
-    dec word [snake_x]
+.ml:
+    dec ax
 
 .moved:
-    ; Check wall collision
-    cmp word [snake_x], 1
+    ; Wall collision
+    cmp ax, 1
     jl game_over
-    cmp word [snake_x], COLS-2
+    cmp ax, COLS-2
     jg game_over
-    cmp word [snake_y], 1
+    cmp bx, 1
     jl game_over
-    cmp word [snake_y], ROWS-2
+    cmp bx, ROWS-2
     jg game_over
+
+    ; Turn old head into body segment
+    mov si, [head]
+    shl si, 1
+    push ax
+    push bx
+    mov ax, [body_x + si]
+    mov bx, [body_y + si]
+    call calc_offset
+    mov word [es:di], 0x02FE  ; body: block, dark green
+    pop bx
+    pop ax
+
+    ; Advance head index in ring buffer
+    mov si, [head]
+    inc si
+    cmp si, MAX_LEN
+    jl .no_wrap_head
+    xor si, si
+.no_wrap_head:
+    mov [head], si
+
+    ; Store new head position
+    shl si, 1
+    mov [body_x + si], ax
+    mov [body_y + si], bx
+
+    ; Draw new head
+    call calc_offset
+    mov word [es:di], 0x0A02  ; smiley, bright green
 
     ; Check food collision
-    mov ax, [snake_x]
+    mov ax, [body_x + si]
     cmp ax, [food_x]
     jne .no_food
-    mov ax, [snake_y]
-    cmp ax, [food_y]
+    mov bx, [body_y + si]
+    cmp bx, [food_y]
     jne .no_food
-    ; Ate food!
+
+    ; Ate food
     inc word [score]
+    inc word [slen]
+    mov byte [grow], 1
     call place_food
-    jmp .draw_head          ; skip tail erase (snake grows)
+    jmp .after_tail
 
 .no_food:
+    ; Check if we need to grow
+    cmp byte [grow], 0
+    jne .skip_erase
+
     ; Erase tail
-    mov ax, [tail_x]
-    mov bx, [tail_y]
+    mov si, [tail]
+    shl si, 1
+    mov ax, [body_x + si]
+    mov bx, [body_y + si]
     call calc_offset
-    mov word [es:di], 0x0720  ; space with gray attr
+    mov word [es:di], 0x0720  ; space
 
-.draw_head:
-    ; Draw head
-    mov ax, [snake_x]
-    mov bx, [snake_y]
-    call calc_offset
-    mov word [es:di], 0x0A02  ; smiley, green on black
+    ; Advance tail index
+    mov si, [tail]
+    inc si
+    cmp si, MAX_LEN
+    jl .no_wrap_tail
+    xor si, si
+.no_wrap_tail:
+    mov [tail], si
+    jmp .after_tail
 
-    ; Draw food
+.skip_erase:
+    mov byte [grow], 0
+
+.after_tail:
+    ; Draw food (in case it was just placed)
     mov ax, [food_x]
     mov bx, [food_y]
     call calc_offset
-    mov word [es:di], 0x0C04  ; diamond, red on black
+    mov word [es:di], 0x0C04  ; diamond, red
 
     ; Draw score
     call draw_score
 
-    ; Delay loop
-    mov cx, 0x0002
+    ; Delay loop -- tuned for ~500K instructions/frame
+    mov cx, 0x0060
 .delay_outer:
     push cx
-    mov cx, 0x0100          ; 256 iterations (fast in emulator)
+    mov cx, 0x0100
 .delay_inner:
     dec cx
     jnz .delay_inner
@@ -169,7 +234,6 @@ game_loop:
     jmp game_loop
 
 game_over:
-    ; Print "GAME OVER" at center
     mov ah, 0x02
     mov bh, 0
     mov dh, 12
@@ -182,11 +246,10 @@ game_over:
     or al, al
     jz .wait_key
     mov ah, 0x09
-    mov bl, 0x4F            ; white on red
+    mov bl, 0x4F
     mov cx, 1
     mov bh, 0
     int 0x10
-    ; Advance cursor
     inc dl
     mov ah, 0x02
     int 0x10
@@ -195,9 +258,9 @@ game_over:
 .wait_key:
     mov ah, 0x00
     int 0x16
-    cmp ah, 0x01            ; ESC to quit
+    cmp ah, 0x01
     je quit
-    jmp start               ; any other key restarts
+    jmp start
 
 quit:
     mov ax, 0x4C00
@@ -205,25 +268,22 @@ quit:
 
 ; ---- Subroutines ----
 
-; calc_offset: AX=col, BX=row -> DI = VRAM offset
 calc_offset:
     push ax
     push dx
-    ; DI = row * 160 + col * 2
     mov di, bx
     mov dx, ROW_BYTES
     push ax
     mov ax, di
-    mul dx              ; AX = row * 160
+    mul dx
     mov di, ax
     pop ax
-    shl ax, 1           ; col * 2
+    shl ax, 1
     add di, ax
     pop dx
     pop ax
     ret
 
-; Draw border
 draw_border:
     push cx
     push di
@@ -231,11 +291,10 @@ draw_border:
     ; Top row
     xor di, di
     mov cx, COLS
-    mov ax, 0x0BCD          ; double horiz, cyan
+    mov ax, 0x0BCD
 .top:
     stosw
     loop .top
-
     ; Bottom row
     mov di, (ROWS-1)*ROW_BYTES
     mov cx, COLS
@@ -243,12 +302,10 @@ draw_border:
 .bottom:
     stosw
     loop .bottom
-
-    ; Side columns
+    ; Sides
     mov cx, ROWS
     xor bx, bx
 .sides:
-    ; Left column: row bx
     mov ax, ROW_BYTES
     push dx
     push cx
@@ -266,7 +323,6 @@ draw_border:
     mov word [es:di], 0x0BBA
     inc bx
     loop .sides
-
     ; Corners
     mov word [es:0], 0x0BC9
     mov word [es:(COLS-1)*2], 0x0BBB
@@ -277,26 +333,26 @@ draw_border:
     pop cx
     ret
 
-; Place food at pseudo-random position
 place_food:
     push ax
     push bx
     push dx
-    ; X: 2..77
-    mov ax, [snake_x]
-    add ax, [snake_y]
-    add ax, [score]
-    add ax, 7
+    ; Simple PRNG
+    mov ax, [score]
+    shl ax, 1
+    add ax, [body_x]       ; use first body entry as entropy
+    add ax, 37
     xor dx, dx
     mov bx, 76
     div bx
     add dx, 2
     mov [food_x], dx
-    ; Y: 2..22
-    mov ax, [snake_x]
-    xor ax, [snake_y]
-    add ax, [score]
-    add ax, 13
+    ; Y
+    mov ax, [score]
+    shl ax, 1
+    shl ax, 1
+    add ax, [body_y]
+    add ax, 53
     xor dx, dx
     mov bx, 21
     div bx
@@ -307,7 +363,6 @@ place_food:
     pop ax
     ret
 
-; Draw score at top-right
 draw_score:
     push ax
     push bx
@@ -318,7 +373,6 @@ draw_score:
     mov dh, 0
     mov dl, 70
     int 0x10
-
     mov si, score_msg
 .pr:
     lodsb
@@ -347,7 +401,6 @@ draw_score:
     mov bh, 0
     int 0x10
     loop .print_digits
-
     pop dx
     pop cx
     pop bx
@@ -355,13 +408,17 @@ draw_score:
     ret
 
 ; ---- Data ----
-snake_x dw 40
-snake_y dw 12
-tail_x  dw 39
-tail_y  dw 12
+dir     db 0
+grow    db 0
+head    dw 2
+tail    dw 0
+slen    dw 3
+score   dw 0
 food_x  dw 20
 food_y  dw 8
-dir     db 0
-score   dw 0
 score_msg db 'Score:', 0
 game_over_msg db 'GAME OVER', 0
+
+; Ring buffer for body positions (MAX_LEN entries)
+body_x: times MAX_LEN dw 0
+body_y: times MAX_LEN dw 0
