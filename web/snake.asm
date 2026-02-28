@@ -220,11 +220,11 @@ game_loop:
     ; Draw score
     call draw_score
 
-    ; Delay loop -- tuned for ~500K instructions/frame
-    mov cx, 0x0060
+    ; Delay: ~3 * 0xFFFF * 2 insn = ~400K instructions per game tick
+    mov cx, 3
 .delay_outer:
     push cx
-    mov cx, 0x0100
+    xor cx, cx              ; 65536 iterations
 .delay_inner:
     dec cx
     jnz .delay_inner
