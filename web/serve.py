@@ -13,10 +13,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         '.wasm': 'application/wasm',
     }
 
+    def log_message(self, fmt, *args):
+        sys.stderr.write(f"  {args[0]}\n")
+
+
 # Always serve from the directory this script lives in.
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 port = int(sys.argv[1]) if len(sys.argv) > 1 else 8086
 print(f"Serving on http://localhost:{port}")
 http.server.HTTPServer.allow_reuse_address = True
-http.server.HTTPServer(("", port), Handler).serve_forever()
+try:
+    http.server.HTTPServer(('', port), Handler).serve_forever()
+except KeyboardInterrupt:
+    print()
