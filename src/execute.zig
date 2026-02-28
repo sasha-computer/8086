@@ -12,6 +12,8 @@ pub const ExecResult = enum {
     halt,
     /// Unimplemented opcode.
     unimplemented,
+    /// Yield back to host (e.g. game polling keyboard with no key available).
+    yield,
 };
 
 /// Segment override state tracked during prefix consumption.
@@ -1436,6 +1438,7 @@ fn handleInt16(cpu: *Cpu, bus: *Bus) ExecResult {
                 cpu.ax.parts.lo = key.ascii;
             } else {
                 cpu.flags.zero = true;
+                return .yield;
             }
         },
         0x02 => {
@@ -2500,6 +2503,7 @@ test "INT 16h AH=01h sets ZF when buffer empty" {
     defer bus.deinit();
 
     cpu.ax.parts.hi = 0x01;
-    _ = handleInt16(&cpu, &bus);
+    const result = handleInt16(&cpu, &bus);
     try std.testing.expect(cpu.flags.zero);
+    try std.testing.expectEqual(ExecResult.yield, result);
 }

@@ -38,7 +38,7 @@ export fn load_program(offset: u16, len: u16) void {
     _ = len;
 }
 
-/// Execute a single instruction. Returns: 0=ok, 1=halt, 2=unimplemented.
+/// Execute a single instruction. Returns: 0=ok, 1=halt, 2=unimplemented, 3=yield.
 export fn step() u8 {
     if (bus.halted) return 1;
     const result = execute.step(&cpu, &bus);
@@ -46,10 +46,11 @@ export fn step() u8 {
         .ok => 0,
         .halt => 1,
         .unimplemented => 2,
+        .yield => 3,
     };
 }
 
-/// Execute up to n instructions. Returns: 0=ok, 1=halt, 2=unimplemented.
+/// Execute up to n instructions. Returns: 0=ok, 1=halt, 2=unimplemented, 3=yield.
 export fn run(n: u32) u8 {
     var i: u32 = 0;
     while (i < n) : (i += 1) {
@@ -59,6 +60,7 @@ export fn run(n: u32) u8 {
             .ok => {},
             .halt => return 1,
             .unimplemented => return 2,
+            .yield => return 3,
         }
     }
     return 0;

@@ -651,7 +651,7 @@
       tickCount++;
       if (tickCount <= 5) rlog('tick #' + tickCount + ' status=' + s);
       updateUI();
-      if (s === 0) { animId = setTimeout(tick, 42); } // ~24fps
+      if (s === 0 || s === 3) { animId = setTimeout(tick, 42); } // 0=ok, 3=yield
       else {
         running = false;
         const label = s === 1 ? 'halted' : 'unimpl';
@@ -662,8 +662,6 @@
           const memPtr = emu.get_memory_ptr();
           const opcode = hex8(mem[memPtr + (regs[8] * 16 + regs[12]) & 0xFFFFF]);
           rlog('unimpl opcode 0x' + opcode + ' at ' + csip);
-        } else {
-          rlog('halted after ' + tickCount + ' ticks');
         }
         setStatus('halted', label);
         enableButtons(false); $('btn-reset').disabled = false;
