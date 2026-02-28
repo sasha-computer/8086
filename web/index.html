@@ -570,7 +570,7 @@
       rlog('loadDemo: ' + filename + ' mode=' + mode);
       if (!emu) { rlog('loadDemo: emu not ready'); return; }
       running = false;
-      if (animId) { cancelAnimationFrame(animId); animId = null; }
+      if (animId) { clearTimeout(animId); animId = null; }
       const resp = await fetch(filename);
       const bytes = new Uint8Array(await resp.arrayBuffer());
       lastProgram = { bytes, name: filename, mode };
@@ -637,18 +637,21 @@
     }
 
     function doRun() {
-      running = true;
+      running = true; tickCount = 0;
       $('btn-run').disabled = true;
       $('btn-pause').disabled = false;
       setStatus('running', 'running');
       tick();
     }
 
+    let tickCount = 0;
     function tick() {
       if (!running) return;
-      const s = emu.run(500000); // 500k instructions per frame
+      const s = emu.run(500000);
+      tickCount++;
+      if (tickCount <= 5) rlog('tick #' + tickCount + ' status=' + s);
       updateUI();
-      if (s === 0) { animId = requestAnimationFrame(tick); }
+      if (s === 0) { animId = setTimeout(tick, 42); } // ~24fps
       else {
         running = false;
         const label = s === 1 ? 'halted' : 'unimpl';
@@ -659,6 +662,8 @@
           const memPtr = emu.get_memory_ptr();
           const opcode = hex8(mem[memPtr + (regs[8] * 16 + regs[12]) & 0xFFFFF]);
           rlog('unimpl opcode 0x' + opcode + ' at ' + csip);
+        } else {
+          rlog('halted after ' + tickCount + ' ticks');
         }
         setStatus('halted', label);
         enableButtons(false); $('btn-reset').disabled = false;
@@ -667,7 +672,7 @@
 
     function doPause() {
       running = false;
-      if (animId) { cancelAnimationFrame(animId); animId = null; }
+      if (animId) { clearTimeout(animId); animId = null; }
       $('btn-run').disabled = false;
       $('btn-pause').disabled = true;
       setStatus('ready', 'paused');
@@ -675,7 +680,7 @@
 
     function doReset() {
       running = false;
-      if (animId) { cancelAnimationFrame(animId); animId = null; }
+      if (animId) { clearTimeout(animId); animId = null; }
       if (lastProgram) {
         loadProgram(lastProgram.bytes, lastProgram.mode);
         prevRegs = new Uint16Array(14);
