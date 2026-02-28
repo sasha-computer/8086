@@ -102,6 +102,30 @@
       }
     }
 
+    /* ---- Demo picker ---- */
+    emu-demos {
+      display: flex;
+      gap: 0.35rem;
+      align-items: center;
+      flex-wrap: wrap;
+      .demo-label {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--text-muted);
+      }
+      button {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        padding: 0.25em 0.6em;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface);
+        color: var(--text-dim);
+        cursor: pointer;
+        transition: background 0.1s, color 0.1s, border-color 0.1s;
+        &:hover { background: var(--accent-dim); color: var(--accent); border-color: var(--accent); }
+      }
+    }
     /* ---- Controls ---- */
     emu-controls {
       display: flex;
@@ -385,6 +409,14 @@
       <span class="filename" id="filename">No file loaded</span>
     </emu-loader>
 
+    <emu-demos>
+      <span class="demo-label">Demos:</span>
+      <button data-demo="snake.com" data-mode="com" data-tab="display">Snake</button>
+      <button data-demo="hello_vram.com" data-mode="com" data-tab="display">Hello VRAM</button>
+      <button data-demo="hello.com" data-mode="com" data-tab="output">Hello</button>
+      <button data-demo="fibonacci.com" data-mode="com" data-tab="output">Fibonacci</button>
+      <button data-demo="count.com" data-mode="com" data-tab="output">Count</button>
+    </emu-demos>
     <emu-controls>
       <button id="btn-step" disabled>Step</button>
       <button id="btn-run" disabled>Run</button>
@@ -524,6 +556,24 @@
         setStatus('halted', 'error');
         $('filename').textContent = 'WASM load failed';
       }
+    }
+
+    async function loadDemo(filename, mode, tab) {
+      if (!emu) return;
+      running = false;
+      if (animId) { cancelAnimationFrame(animId); animId = null; }
+      const resp = await fetch(filename);
+      const bytes = new Uint8Array(await resp.arrayBuffer());
+      lastProgram = { bytes, name: filename, mode };
+      loadProgram(bytes, mode);
+      $('filename').textContent = filename;
+      $('load-mode').value = mode;
+      $('output').textContent = '';
+      prevRegs = new Uint16Array(14);
+      enableButtons(true);
+      if (tab) document.getElementById('tab-' + tab).checked = true;
+      updateUI();
+      doRun();
     }
 
     function onKey(e) {
