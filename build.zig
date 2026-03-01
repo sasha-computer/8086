@@ -24,6 +24,25 @@ pub fn build(b: *std.Build) void {
     }
     run_step.dependOn(&run_cmd.step);
 
+    // zig build dbg -- [args] -- Build and run the native debugger
+    const dbg = b.addExecutable(.{
+        .name = "emu8086-dbg",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/debugger.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(dbg);
+
+    const dbg_step = b.step("dbg", "Run the native debugger");
+    const dbg_cmd = b.addRunArtifact(dbg);
+    dbg_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |a| {
+        dbg_cmd.addArgs(a);
+    }
+    dbg_step.dependOn(&dbg_cmd.step);
+
     // zig build test -- run all tests (ReleaseFast for speed)
     // Use -Doptimize=Debug to run with safety checks if needed.
     const test_step = b.step("test", "Run all tests (ReleaseFast)");
