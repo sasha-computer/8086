@@ -36,7 +36,7 @@ Tests parse ~700MB of JSON and run hundreds of thousands of individual test case
 | `web/cp437.js` | CP437 8x16 bitmap font data (256 glyphs, 16 bytes each) for text-mode display |
 | `web/serve.py` | Dev server with `application/wasm` MIME type (`uv run web/serve.py`) |
 | `web/*.com` | Test .COM binaries (hello, fibonacci, count, snake, hello_vram) |
-| `src/debugger.zig` | Native CLI debugger: loads .COM, renders text VRAM to terminal via ANSI, raw keyboard input. Headless mode for scripted testing. |
+| `src/debugger.zig` | Native CLI debugger: loads .COM, renders text VRAM to terminal via ANSI, raw keyboard input. Headless mode (`--headless N`) for scripted testing, key injection (`--key INSN:SC:ASCII`). |
 | `src/snake_test.zig` | Integration tests for the snake game: loads snake.com, injects keys, asserts VRAM state and timing. |
 
 ## Key patterns
