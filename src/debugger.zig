@@ -131,21 +131,30 @@ pub fn main() !void {
 
     if (args.len < 2) {
         const usage =
-            "Usage: emu8086-dbg <program.com> [--step] [--headless N]\n" ++
-            "\nControls:\n" ++
+            "Usage: emu8086-dbg <program.com> [--step] [--headless N] [--key INSN:SC:ASCII ...]\n" ++
+            "\nControls (interactive mode):\n" ++
             "  Arrow keys, letters, digits  -- forwarded to 8086\n" ++
             "  Ctrl-C or Ctrl-Q             -- quit\n" ++
             "  Ctrl-P                       -- toggle pause/run\n" ++
             "  Ctrl-S                       -- single step (when paused)\n" ++
             "  Ctrl-R                       -- dump registers\n" ++
             "  Ctrl-D                       -- toggle debug trace\n" ++
-            "\n  --headless N  Run N instructions then dump VRAM + registers (no TTY)\n";
+            "\n  --headless N       Run N instructions then dump VRAM + registers (no TTY)\n" ++
+            "  --key INSN:SC:ASCII  Inject key at instruction count (headless only, repeatable)\n";
         writeAll(usage);
         std.process.exit(1);
     }
 
+    const KeyInject = struct {
+        at: u64,
+        scancode: u8,
+        ascii: u8,
+    };
+
     var step_mode = false;
     var headless_count: ?u64 = null;
+    var key_injects: [64]KeyInject = undefined;
+    var key_inject_count: usize = 0;
     var i_arg: usize = 2;
     while (i_arg < args.len) : (i_arg += 1) {
         if (std.mem.eql(u8, args[i_arg], "--step")) {
@@ -157,8 +166,31 @@ pub fn main() !void {
             } else {
                 headless_count = 1_000_000;
             }
+        } else if (std.mem.eql(u8, args[i_arg], "--key")) {
+            i_arg += 1;
+            if (i_arg < args.len and key_inject_count < 64) {
+                // Parse INSN:SCANCODE:ASCII
+                var it = std.mem.splitScalar(u8, args[i_arg], ':');
+                const at_str = it.next() orelse continue;
+                const sc_str = it.next() orelse continue;
+                const ascii_str = it.next() orelse continue;
+                key_injects[key_inject_count] = .{
+                    .at = std.fmt.parseInt(u64, at_str, 10) catch continue,
+                    .scancode = std.fmt.parseInt(u8, sc_str, 10) catch continue,
+                    .ascii = std.fmt.parseInt(u8, ascii_str, 10) catch continue,
+                };
+                key_inject_count += 1;
+            }
         }
     }
+
+    // Sort key injects by instruction count
+    const injects = key_injects[0..key_inject_count];
+    std.mem.sort(KeyInject, injects, {}, struct {
+        fn lessThan(_: void, a: KeyInject, b: KeyInject) bool {
+            return a.at < b.at;
+        }
+    }.lessThan);
 
     // Load .COM file
     const file = try std.fs.cwd().openFile(args[1], .{});
@@ -194,7 +226,13 @@ pub fn main() !void {
     // Headless mode: run N instructions, dump state, exit
     if (headless_count) |max_insns| {
         var total_insns: u64 = 0;
+        var next_inject: usize = 0;
         while (total_insns < max_insns and !bus.halted) {
+            // Inject keys at scheduled instruction counts
+            while (next_inject < injects.len and injects[next_inject].at <= total_insns) {
+                _ = bus.pushKey(injects[next_inject].scancode, injects[next_inject].ascii);
+                next_inject += 1;
+            }
             const result = execute.step(&cpu, &bus);
             total_insns += 1;
             switch (result) {
