@@ -1193,9 +1193,17 @@ fn opRetFarImm(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
 
 fn opInt(cpu: *Cpu, bus: *Bus, _: u8, _: *const PrefixState) ExecResult {
     const vector = Decoder.fetchByte(cpu, bus);
-    // On WASM, intercept DOS interrupts for .COM program support.
-    // On native, always go through the IVT for hardware accuracy.
+    // Intercept BIOS/DOS interrupts when enabled (WASM builds, native debugger).
+    // Otherwise go through the IVT for hardware test accuracy.
     if (comptime builtin.cpu.arch == .wasm32) {
+        if (vector == 0x10) return handleInt10(cpu, bus);
+        if (vector == 0x16) return handleInt16(cpu, bus);
+        if (vector == 0x21) return handleInt21(cpu, bus);
+        if (vector == 0x20) {
+            bus.halted = true;
+            return .halt;
+        }
+    } else if (bus.intercept_bios) {
         if (vector == 0x10) return handleInt10(cpu, bus);
         if (vector == 0x16) return handleInt16(cpu, bus);
         if (vector == 0x21) return handleInt21(cpu, bus);

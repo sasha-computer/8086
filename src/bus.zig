@@ -18,6 +18,10 @@ pub const Bus = struct {
     /// Set by INT 21h AH=4Ch to signal program exit.
     halted: bool = false,
 
+    /// When true, INT 10h/16h/21h/20h are intercepted by the emulator
+    /// instead of going through the IVT. Used by WASM and the native debugger.
+    intercept_bios: bool = Bus.is_wasm,
+
     // --- Video state ---
 
     /// Current video mode (0x03 = 80x25 text, 0x13 = 320x200 graphics).
