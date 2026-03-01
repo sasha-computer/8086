@@ -220,9 +220,19 @@ game_loop:
     ; Draw score
     call draw_score
 
-    ; Delay loop: ~400K instructions per game tick.
-    ; Controls snake speed regardless of host timing.
-    mov cx, 3
+    ; Delay: scale by direction so vertical/horizontal speed feels equal.
+    ; Text cells are 8x16 px, so vertical moves cover 2x the pixels.
+    ; Horizontal (dir 0 or 2): 3 outer loops ~400K insns.
+    ; Vertical (dir 1 or 3): 6 outer loops ~800K insns (2x slower).
+    mov cl, [dir]
+    cmp cl, 1
+    je .vert_delay
+    cmp cl, 3
+    je .vert_delay
+    mov cx, 3              ; horizontal
+    jmp .delay_outer
+.vert_delay:
+    mov cx, 6              ; vertical
 .delay_outer:
     push cx
     xor cx, cx              ; 65536 iterations
