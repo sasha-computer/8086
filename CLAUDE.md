@@ -9,9 +9,11 @@ files, 82 test groups).
 ## Build and test
 
 ```
-zig build          # native binary
-zig build wasm     # WASM module -> zig-out/web/emu8086.wasm
-zig build test     # hardware validation tests (requires JSON files in tests/)
+zig build              # native binary + debugger
+zig build wasm         # WASM module -> zig-out/web/emu8086.wasm
+zig build test         # hardware validation tests (requires JSON files in tests/)
+zig build test-snake   # snake game integration tests (loads web/snake.com)
+zig build dbg -- web/snake.com  # run native debugger (interactive, needs TTY)
 ```
 
 After `zig build wasm`, copy `zig-out/web/emu8086.wasm` to `web/` before serving.
@@ -25,7 +27,7 @@ Tests parse ~700MB of JSON and run hundreds of thousands of individual test case
 | `src/cpu.zig` | CPU state: packed union registers (AX/AH/AL share storage), FLAGS as bools, segments |
 | `src/bus.zig` | 1MB flat memory, segment:offset with 20-bit wrap. Conditional compilation: `page_allocator` on native, static array on WASM. Output buffer and halted flag for DOS support. |
 | `src/decode.zig` | Instruction fetch from CS:IP, ModR/M decode, effective address resolution |
-| `src/execute.zig` | Comptime 256-entry dispatch table, all instruction handlers, prefix loop. INT 21h/20h interception on WASM only (native goes through IVT). |
+| `src/execute.zig` | Comptime 256-entry dispatch table, all instruction handlers, prefix loop. INT 10h/16h/21h/20h interception when `bus.intercept_bios` is set (WASM default + native debugger). |
 | `src/flags.zig` | Flag computation: comptime parity LUT, add/sub/inc/dec/logic flag helpers |
 | `src/test_runner.zig` | JSON parser for SingleStepTests format, state loader, delta-merge comparator |
 | `src/main.zig` | Native CLI entry point |
@@ -33,7 +35,9 @@ Tests parse ~700MB of JSON and run hundreds of thousands of individual test case
 | `web/index.html` | Browser frontend. CSS handles all UI interaction (tabs, theming). JS for WASM bridge, CP437 text display renderer, keyboard input. |
 | `web/cp437.js` | CP437 8x16 bitmap font data (256 glyphs, 16 bytes each) for text-mode display |
 | `web/serve.py` | Dev server with `application/wasm` MIME type (`uv run web/serve.py`) |
-| `web/*.com` | Test .COM binaries (hello, fibonacci, count) |
+| `web/*.com` | Test .COM binaries (hello, fibonacci, count, snake, hello_vram) |
+| `src/debugger.zig` | Native CLI debugger: loads .COM, renders text VRAM to terminal via ANSI, raw keyboard input. Headless mode for scripted testing. |
+| `src/snake_test.zig` | Integration tests for the snake game: loads snake.com, injects keys, asserts VRAM state and timing. |
 
 ## Key patterns
 
