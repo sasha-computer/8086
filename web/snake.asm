@@ -220,8 +220,17 @@ game_loop:
     ; Draw score
     call draw_score
 
-    ; No delay loop needed -- INT 16h AH=01 yields to host when no key,
-    ; and the host's setTimeout(tick, 42) controls game speed (~24fps).
+    ; Delay loop: ~400K instructions per game tick.
+    ; Controls snake speed regardless of host timing.
+    mov cx, 3
+.delay_outer:
+    push cx
+    xor cx, cx              ; 65536 iterations
+.delay_inner:
+    dec cx
+    jnz .delay_inner
+    pop cx
+    loop .delay_outer
     jmp game_loop
 
 game_over:
