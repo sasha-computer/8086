@@ -70,6 +70,16 @@ pub fn build(b: *std.Build) void {
     });
     test_debug_step.dependOn(&b.addRunArtifact(debug_tests).step);
 
+    // zig build test-snake -- Snake game integration tests
+    const snake_test_step = b.step("test-snake", "Run snake game integration tests");
+    const snake_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/snake_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    snake_test_step.dependOn(&b.addRunArtifact(snake_tests).step);
     // zig build wasm -- Build WASM module for browser
     const wasm = b.addExecutable(.{
         .name = "emu8086",
